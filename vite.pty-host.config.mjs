@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
-// Main process. Rollup cannot bundle native addons or electron — externalize them.
+// PTY-host utilityProcess (Node). node-pty is a native addon — must be external.
 // https://vitejs.dev/config
 export default defineConfig({
   plugins: [tsconfigPaths()],

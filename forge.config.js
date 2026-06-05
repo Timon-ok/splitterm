@@ -25,6 +25,11 @@ module.exports = {
     },
   ],
   plugins: [
+    // Unpacks native *.node addons (e.g. node-pty) from app.asar so dlopen can load them.
+    {
+      name: '@electron-forge/plugin-auto-unpack-natives',
+      config: {},
+    },
     {
       name: '@electron-forge/plugin-vite',
       config: {
@@ -33,14 +38,20 @@ module.exports = {
         build: [
           {
             // `entry` is just an alias for `build.lib.entry` in the corresponding file of `config`.
-            entry: 'src/main.js',
+            entry: 'src/main/main.ts',
             config: 'vite.main.config.mjs',
             target: 'main',
           },
           {
-            entry: 'src/preload.js',
+            entry: 'src/preload/preload.ts',
             config: 'vite.preload.config.mjs',
             target: 'preload',
+          },
+          {
+            // PTY-host utilityProcess: a Node child of main hosting all node-pty shells.
+            entry: 'src/pty-host/host.ts',
+            config: 'vite.pty-host.config.mjs',
+            target: 'main',
           },
         ],
         renderer: [

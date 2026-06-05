@@ -90,3 +90,6 @@ typings/
 
 # Electron-Forge
 out/
+
+# Local planning notes (not tracked)
+plans/
