@@ -4,8 +4,21 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
+    // The Vite plugin otherwise sets `ignore` to drop everything except `/.vite`, which
+    // excludes node_modules — so the externalized native module (node-pty) never ships.
+    // Provide our own ignore that keeps the Vite output AND the node-pty subtree.
+    // (electron-squirrel-startup + @xterm/* are bundled by Vite, so they don't need copying.)
+    ignore: (file) => {
+      if (!file) return false;
+      if (file.startsWith('/.vite')) return false;
+      if (file === '/node_modules') return false;
+      if (file === '/node_modules/node-pty' || file.startsWith('/node_modules/node-pty/')) return false;
+      return true;
+    },
   },
-  rebuildConfig: {},
+  // node-pty ships ABI-stable N-API prebuilds, so no native rebuild is needed (and this avoids
+  // requiring a C++ build toolchain). Rebuild nothing.
+  rebuildConfig: { onlyModules: [] },
   makers: [
     {
       name: '@electron-forge/maker-squirrel',

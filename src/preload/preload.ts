@@ -24,3 +24,9 @@ const api: SplittermApi = {
 };
 
 contextBridge.exposeInMainWorld('splitterm', api);
+
+// A MessagePort can't cross contextBridge as a function arg, so forward it to the page via
+// window.postMessage with a transfer list. The renderer listens for this tagged message.
+ipcRenderer.on(CONTROL_CHANNELS.ptyPort, (e) => {
+  window.postMessage({ __splittermPort: true }, '*', e.ports);
+});
