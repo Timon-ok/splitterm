@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { CONTROL_CHANNELS } from '@shared/ipc';
+import { startPtyHost, connectRendererPort, stopPtyHost } from './pty-supervisor';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -34,6 +35,9 @@ const createWindow = (): void => {
 
   win.once('ready-to-show', () => win.show());
 
+  // Hand the renderer its end of the PTY firehose once the page has loaded.
+  win.webContents.on('did-finish-load', () => connectRendererPort(win));
+
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     void win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -49,6 +53,7 @@ const createWindow = (): void => {
 ipcMain.handle(CONTROL_CHANNELS.appVersion, () => app.getVersion());
 
 app.whenReady().then(() => {
+  startPtyHost();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -58,3 +63,5 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (!isMac) app.quit();
 });
+
+app.on('before-quit', () => stopPtyHost());
