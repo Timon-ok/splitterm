@@ -60,8 +60,9 @@ await sleep(900);
 result.afterSecond = await paneCount();
 result.xtermAfterSecond = await win.locator('.xterm').count();
 
-// 4) Drag-to-swap: move pane[0] onto pane[1] and confirm the term ids trade places.
+// 4) Responsive drag: a ghost follows the cursor; dropping swaps the panes.
 const cellTermIds = () => win.locator('[data-leaf-id]').evaluateAll((els) => els.map((e) => e.dataset.termId));
+const ghostBox = () => win.locator('.pane-ghost').boundingBox().catch(() => null);
 result.termIdsBefore = await cellTermIds();
 const grip = win.locator('[aria-label="Move pane"]').first();
 const target = win.locator('[data-leaf-id]').nth(1);
@@ -70,9 +71,22 @@ const tb = await target.boundingBox();
 if (gb && tb) {
   await win.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
   await win.mouse.down();
-  await win.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
+
+  await win.mouse.move(400, 300, { steps: 6 });
+  const g1 = await ghostBox();
+  await win.mouse.move(700, 520, { steps: 6 });
+  const g2 = await ghostBox();
+  result.ghostVisible = !!g1;
+  result.ghostAt1 = g1 && { x: Math.round(g1.x), y: Math.round(g1.y) };
+  result.ghostAt2 = g2 && { x: Math.round(g2.x), y: Math.round(g2.y) };
+  // ghost tracks the cursor (~14px offset) and moves between the two positions
+  result.ghostTracksCursor =
+    !!g1 && !!g2 && Math.abs(g1.x - 414) < 25 && Math.abs(g2.x - 714) < 25 && g2.x - g1.x > 100;
+
+  await win.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 6 });
   await win.mouse.up();
   await sleep(900);
+  result.ghostGoneAfterDrop = (await win.locator('.pane-ghost').count()) === 0;
 }
 result.termIdsAfter = await cellTermIds();
 result.swapped =

@@ -1,7 +1,7 @@
 // BSP tiling engine. Renders the layout tree as nested CSS Grid and re-parents STABLE xterm
 // elements between cells (never remounts — preserves scrollback/state). Drag-resize adjusts
 // `fr` ratios live; per-pane ResizeObserver refits. See architecture.md §5, project-structure.md §7.
-import { X, GripVertical } from 'lucide';
+import { X, GripVertical, Terminal as TerminalIcon } from 'lucide';
 import { createTerminal } from '@features/terminal';
 import { getPane } from '@platform/pane-registry';
 import { icon } from '../../chrome/icons';
@@ -376,14 +376,37 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     relayout(bId); // focus follows the dragged terminal to its new home
   }
 
-  // Pointer-drag a pane via its grip handle onto another pane to swap them.
+  // Pointer-drag a pane via its grip handle: a ghost follows the cursor, the source pane dims,
+  // the hovered pane highlights, and dropping swaps them.
   function startPaneDrag(sourceId: string, e: PointerEvent): void {
     e.preventDefault();
     e.stopPropagation();
     if (!root || collectLeaves(root).length < 2) return;
+
     let targetId: string | null = null;
     const cellFor = (id: string): HTMLElement | null =>
       container.querySelector<HTMLElement>(`[data-leaf-id="${CSS.escape(id)}"]`);
+
+    const sourceCell = cellFor(sourceId);
+    sourceCell?.classList.add('pane-source'); // lift/dim the pane being moved
+
+    // Cursor-following ghost. pointer-events:none so it never blocks the drop hit-test; positioned
+    // with transform so the follow stays on the compositor (smooth/responsive).
+    const ghost = document.createElement('div');
+    ghost.className =
+      'pane-ghost fixed left-0 top-0 z-[100] pointer-events-none flex items-center gap-2 h-9 px-3 ' +
+      'rounded-[var(--r-md)] border border-[var(--accent)] bg-[var(--bg-elevated)] text-[12px] ' +
+      'text-[var(--text-primary)] shadow-[0_8px_24px_rgba(0,0,0,0.45)] opacity-95 will-change-transform';
+    ghost.appendChild(icon(TerminalIcon, 14));
+    const label = document.createElement('span');
+    label.textContent = 'Terminal';
+    ghost.appendChild(label);
+    document.body.appendChild(ghost);
+    const moveGhost = (x: number, y: number): void => {
+      ghost.style.transform = `translate(${x + 14}px, ${y + 14}px)`;
+    };
+    moveGhost(e.clientX, e.clientY);
+
     const setTarget = (id: string | null): void => {
       const next = id && id !== sourceId ? id : null;
       if (next === targetId) return;
@@ -392,6 +415,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
       if (targetId) cellFor(targetId)?.classList.add('drop-target');
     };
     const onMove = (ev: PointerEvent): void => {
+      moveGhost(ev.clientX, ev.clientY);
       const under = document.elementFromPoint(ev.clientX, ev.clientY);
       const cell = under instanceof Element ? under.closest<HTMLElement>('[data-leaf-id]') : null;
       setTarget(cell?.dataset.leafId ?? null);
@@ -400,6 +424,8 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       document.body.classList.remove('pane-dragging');
+      ghost.remove();
+      sourceCell?.classList.remove('pane-source');
       const dest = targetId;
       setTarget(null);
       if (dest) swap(sourceId, dest);
