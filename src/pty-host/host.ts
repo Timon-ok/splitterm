@@ -3,6 +3,7 @@
 import type { TermId } from '@shared/ids';
 import type { PortLike, RendererToHost, SpawnRequest } from '@shared/ipc';
 import { spawnPty, writePty, resizePty, ackPty, killPty, killAll } from './pty-manager';
+import { resolveShell, detectProfiles, type ResolvedShell, type ShellProfileFull } from './shell-detect';
 
 // Control messages main → host (over the utilityProcess parentPort).
 type HostControl =
@@ -16,14 +17,25 @@ interface ParentPortEvent {
   ports: PortLike[];
 }
 const parentPort = (process as unknown as {
-  parentPort?: { on(event: 'message', listener: (e: ParentPortEvent) => void): void };
+  parentPort?: {
+    on(event: 'message', listener: (e: ParentPortEvent) => void): void;
+    postMessage(message: unknown): void;
+  };
 }).parentPort;
 
 let firehose: PortLike | null = null;
-// Spawns can arrive before the renderer's firehose port is connected (the renderer requests a
-// terminal during page eval, but main brokers the port on did-finish-load). Queue until ready,
-// then drain — otherwise the PTY is silently never created and the terminal hangs.
-const pendingSpawns: Array<{ id: TermId; opts: SpawnRequest }> = [];
+let fullProfiles: ShellProfileFull[] = [];
+// Spawns can arrive before the renderer's firehose port is connected; queue and drain on connect.
+const pendingSpawns: Array<{ id: TermId; opts: SpawnRequest; shell: ResolvedShell }> = [];
+
+function resolveProfile(profileId?: string): ResolvedShell {
+  if (profileId) {
+    const p = fullProfiles.find((x) => x.id === profileId);
+    if (p) return { file: p.file, args: p.args };
+    console.warn(`[pty-host] unknown profile "${profileId}", using default shell`);
+  }
+  return resolveShell();
+}
 
 function onPortMessage(e: { data: unknown }): void {
   const msg = e.data as RendererToHost;
@@ -46,23 +58,32 @@ parentPort?.on('message', (e) => {
     case 'connect': {
       const port = e.ports[0];
       if (!port) break;
-      firehose?.close?.(); // release a previous port (e.g. dev reload reconnect)
+      firehose?.close?.();
       firehose = port;
       port.start?.();
       port.on?.('message', onPortMessage);
-      // Drain any spawns that arrived before the port was ready.
-      for (const s of pendingSpawns) spawnPty(s.id, s.opts, port);
+      for (const s of pendingSpawns) spawnPty(s.id, s.opts, port, s.shell);
       pendingSpawns.length = 0;
       break;
     }
-    case 'spawn':
-      if (firehose) spawnPty(msg.id, msg.opts, firehose);
-      else pendingSpawns.push({ id: msg.id, opts: msg.opts });
+    case 'spawn': {
+      const shell = resolveProfile(msg.opts.profileId);
+      if (firehose) spawnPty(msg.id, msg.opts, firehose, shell);
+      else pendingSpawns.push({ id: msg.id, opts: msg.opts, shell });
       break;
+    }
     case 'kill':
       killPty(msg.id);
       break;
   }
 });
+
+// Detect available shell profiles off the hot path; report id+label to main for the UI.
+void detectProfiles()
+  .then((list) => {
+    fullProfiles = list;
+    parentPort?.postMessage({ type: 'profiles', list: list.map((p) => ({ id: p.id, label: p.label })) });
+  })
+  .catch((err) => console.error('[pty-host] profile detection failed:', err));
 
 process.on('exit', killAll);

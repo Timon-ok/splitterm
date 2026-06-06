@@ -6,6 +6,8 @@ export const CONTROL_CHANNELS = {
   ptySpawn: 'pty:spawn',
   ptyResize: 'pty:resize',
   ptyKill: 'pty:kill',
+  /** renderer → main: list detected shell profiles */
+  ptyProfiles: 'pty:profiles',
   /** main → renderer: hands over the MessagePort for a terminal's byte firehose */
   ptyPort: 'pty:port',
 

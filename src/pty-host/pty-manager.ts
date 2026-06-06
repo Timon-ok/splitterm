@@ -1,7 +1,7 @@
 import { spawn, type IPty } from 'node-pty';
 import type { TermId } from '@shared/ids';
 import type { PortLike, SpawnRequest } from '@shared/ipc';
-import { resolveShell, homeDir, sanitizedEnv } from './shell-detect';
+import { homeDir, sanitizedEnv, type ResolvedShell } from './shell-detect';
 
 // Watermark flow control: pause node-pty when the renderer is behind, resume when it catches up.
 // Bounds CPU + RAM under a flood (yes | cat). See plans/performance.md §5.
@@ -17,8 +17,7 @@ interface Session {
 
 const sessions = new Map<number, Session>();
 
-export function spawnPty(id: TermId, opts: SpawnRequest, port: PortLike): void {
-  const shell = resolveShell();
+export function spawnPty(id: TermId, opts: SpawnRequest, port: PortLike, shell: ResolvedShell): void {
   const pty = spawn(shell.file, shell.args, {
     name: 'xterm-256color',
     cols: opts.cols > 0 ? opts.cols : 80,

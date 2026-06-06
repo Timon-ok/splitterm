@@ -8,6 +8,7 @@ const api: SplittermApi = {
     spawn: (req) => ipcRenderer.invoke(CONTROL_CHANNELS.ptySpawn, req),
     resize: (req) => ipcRenderer.invoke(CONTROL_CHANNELS.ptyResize, req),
     kill: (req) => ipcRenderer.invoke(CONTROL_CHANNELS.ptyKill, req),
+    profiles: () => ipcRenderer.invoke(CONTROL_CHANNELS.ptyProfiles),
   },
   settings: {
     get: () => ipcRenderer.invoke(CONTROL_CHANNELS.settingsGet),
