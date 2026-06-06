@@ -1,7 +1,7 @@
 // BSP tiling engine. Renders the layout tree as nested CSS Grid and re-parents STABLE xterm
 // elements between cells (never remounts — preserves scrollback/state). Drag-resize adjusts
 // `fr` ratios live; per-pane ResizeObserver refits. See architecture.md §5, project-structure.md §7.
-import { X } from 'lucide';
+import { X, GripVertical } from 'lucide';
 import { createTerminal } from '@features/terminal';
 import { getPane } from '@platform/pane-registry';
 import { icon } from '../../chrome/icons';
@@ -17,8 +17,8 @@ import {
   closeLeaf,
 } from '@shared/domain/layout-tree';
 
-const GUTTER = 6; // px — track width; thin divider that highlights on hover
-const FOCUS_RING = 'shadow-[inset_0_0_0_1px_var(--accent)]';
+const GUTTER = 6; // px — transparent gap between cards; highlights on hover for resize
+const FOCUS_RING = 'pane-focused'; // styled in base.css (accent border on the focused card)
 const MIN_RATIO = 0.05;
 
 export interface Tiling {
@@ -131,7 +131,10 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     // it — the xterm inside is absolutely positioned, so without this the cell collapses to 0 height.
     cell.className = 'group relative h-full w-full min-w-0 min-h-0 overflow-hidden';
     cell.dataset.leafId = node.id;
-    cell.style.setProperty('view-transition-name', `pane-${node.id}`); // morph across layout changes
+    cell.dataset.termId = String(node.termId);
+    // Name the transition group by TERMINAL so swaps/splits animate the terminal moving to its new
+    // position (rather than a crossfade in place).
+    cell.style.setProperty('view-transition-name', `term-${node.termId}`);
     if (node.id === focusedLeafId) cell.classList.add(FOCUS_RING);
     const pane = getPane(node.termId);
     if (pane) cell.appendChild(pane.el);
@@ -140,8 +143,24 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
       () => focusLeaf(node.id),
       { capture: true }, // focus the tile, but let the event reach xterm for cursor/selection
     );
+    cell.appendChild(makeDragHandle(node.id));
     cell.appendChild(makeCloseButton(node.id));
     return cell;
+  }
+
+  function makeDragHandle(leafId: string): HTMLElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = 'Drag to move';
+    btn.setAttribute('aria-label', 'Move pane');
+    btn.className =
+      'app-no-drag absolute top-1 left-1 z-10 inline-flex items-center justify-center w-5 h-5 ' +
+      'rounded-[var(--r-sm)] cursor-grab opacity-0 group-hover:opacity-100 ' +
+      'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] ' +
+      'transition-opacity ease-[var(--ease-out)] duration-[var(--motion-fast)]';
+    btn.appendChild(icon(GripVertical, 13));
+    btn.addEventListener('pointerdown', (e) => startPaneDrag(leafId, e));
+    return btn;
   }
 
   function makeCloseButton(leafId: string): HTMLElement {
@@ -181,7 +200,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
   function makeGutter(node: SplitNode, i: number, grid: HTMLElement): HTMLElement {
     const g = document.createElement('div');
     g.className =
-      `min-w-0 min-h-0 bg-[var(--border)] hover:bg-[var(--accent)] ` +
+      `min-w-0 min-h-0 rounded-full hover:bg-[var(--accent)] ` +
       `transition-colors duration-[var(--motion-fast)] ` +
       (node.dir === 'row' ? 'cursor-col-resize' : 'cursor-row-resize');
     g.addEventListener('mousedown', (e) => startDrag(e, node, i, grid));
@@ -343,6 +362,51 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
 
   function closeActive(): void {
     if (focusedLeafId) closeById(focusedLeafId);
+  }
+
+  // Swap the terminals at two leaves (the tree structure stays; only the contents trade places).
+  function swap(aId: string, bId: string): void {
+    if (!root || aId === bId) return;
+    const a = findLeaf(root, aId);
+    const b = findLeaf(root, bId);
+    if (!a || !b) return;
+    const tmp = a.termId;
+    a.termId = b.termId;
+    b.termId = tmp;
+    relayout(bId); // focus follows the dragged terminal to its new home
+  }
+
+  // Pointer-drag a pane via its grip handle onto another pane to swap them.
+  function startPaneDrag(sourceId: string, e: PointerEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!root || collectLeaves(root).length < 2) return;
+    let targetId: string | null = null;
+    const cellFor = (id: string): HTMLElement | null =>
+      container.querySelector<HTMLElement>(`[data-leaf-id="${CSS.escape(id)}"]`);
+    const setTarget = (id: string | null): void => {
+      const next = id && id !== sourceId ? id : null;
+      if (next === targetId) return;
+      if (targetId) cellFor(targetId)?.classList.remove('drop-target');
+      targetId = next;
+      if (targetId) cellFor(targetId)?.classList.add('drop-target');
+    };
+    const onMove = (ev: PointerEvent): void => {
+      const under = document.elementFromPoint(ev.clientX, ev.clientY);
+      const cell = under instanceof Element ? under.closest<HTMLElement>('[data-leaf-id]') : null;
+      setTarget(cell?.dataset.leafId ?? null);
+    };
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.classList.remove('pane-dragging');
+      const dest = targetId;
+      setTarget(null);
+      if (dest) swap(sourceId, dest);
+    };
+    document.body.classList.add('pane-dragging');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   }
 
   // Button "−": close the most-recently-created terminal that still exists (down to empty).
