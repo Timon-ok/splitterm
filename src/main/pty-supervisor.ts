@@ -1,11 +1,12 @@
 import { utilityProcess, MessageChannelMain, ipcMain, type UtilityProcess, type BrowserWindow } from 'electron';
 import path from 'node:path';
-import { CONTROL_CHANNELS, type SpawnRequest, type SpawnResponse } from '@shared/ipc';
+import { CONTROL_CHANNELS, type SpawnRequest, type SpawnResponse, type ShellProfile } from '@shared/ipc';
 import { asTermId, type TermId } from '@shared/ids';
 
 let host: UtilityProcess | null = null;
 let hostReady = false;
 let nextId = 1;
+let profiles: ShellProfile[] = [];
 
 /** Fork the pty-host utilityProcess and register the lifecycle (spawn/kill) IPC handlers. */
 export function startPtyHost(): void {
@@ -17,6 +18,10 @@ export function startPtyHost(): void {
     hostReady = false;
     host = null;
   });
+  host.on('message', (msg: unknown) => {
+    const m = msg as { type?: string; list?: ShellProfile[] };
+    if (m?.type === 'profiles' && Array.isArray(m.list)) profiles = m.list;
+  });
 
   ipcMain.handle(CONTROL_CHANNELS.ptySpawn, (_e, req: SpawnRequest): SpawnResponse => {
     const id = asTermId(nextId++);
@@ -27,6 +32,8 @@ export function startPtyHost(): void {
   ipcMain.handle(CONTROL_CHANNELS.ptyKill, (_e, req: { id: TermId }) => {
     host?.postMessage({ type: 'kill', id: req.id });
   });
+
+  ipcMain.handle(CONTROL_CHANNELS.ptyProfiles, (): ShellProfile[] => profiles);
 }
 
 /**

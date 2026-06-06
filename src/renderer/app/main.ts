@@ -4,7 +4,7 @@ import '../styles/tokens.css';
 import '../styles/base.css';
 import { ipc } from '@platform/ipc-client';
 import { initPortBridge } from '@platform/pty-port';
-import { createTiling } from '@features/tiling';
+import { createTiling, type Tiling } from '@features/tiling';
 import { createTopbar } from '../chrome/topbar';
 import { createSidebar } from '../chrome/sidebar';
 
@@ -21,8 +21,13 @@ body.className = 'body';
 const tilingHost = document.createElement('div');
 tilingHost.className = 'terminal-host';
 
+let tiling: Tiling | null = null;
 const sidebar = createSidebar(body);
-const topbar = createTopbar({ onToggleSidebar: () => sidebar.toggle() });
+const topbar = createTopbar({
+  onToggleSidebar: () => sidebar.toggle(),
+  onNewTerminal: () => void tiling?.addTerminal(),
+  onPickProfile: (id) => void tiling?.addTerminal(id),
+});
 
 body.append(sidebar.panel, tilingHost); // column 1 = sidebar, column 2 = tiles
 
@@ -36,7 +41,8 @@ statusbar.innerHTML = `
 root.replaceChildren(topbar, body, statusbar);
 
 createTiling(tilingHost)
-  .then(() => {
+  .then((t) => {
+    tiling = t;
     const status = document.getElementById('shell-status');
     if (status) status.textContent = 'ready';
   })

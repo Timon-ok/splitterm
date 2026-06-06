@@ -20,6 +20,8 @@ const FOCUS_RING = 'shadow-[inset_0_0_0_1px_var(--accent)]';
 const MIN_RATIO = 0.05;
 
 export interface Tiling {
+  /** Add a terminal by splitting the focused pane along its longer axis. */
+  addTerminal(profileId?: string): Promise<void>;
   dispose(): void;
 }
 
@@ -30,9 +32,21 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
   let leafSeq = 0;
   let dragging = false;
 
-  async function makeLeaf(): Promise<LeafNode> {
-    const { termId } = await createTerminal();
+  async function makeLeaf(profileId?: string): Promise<LeafNode> {
+    const { termId } = await createTerminal(profileId);
     return leaf(`leaf-${++leafSeq}`, termId);
+  }
+
+  /** Split direction that keeps panes roughly square: split the focused cell's longer axis. */
+  function autoSplitDir(): Dir {
+    if (focusedLeafId) {
+      const cell = container.querySelector<HTMLElement>(`[data-leaf-id="${CSS.escape(focusedLeafId)}"]`);
+      if (cell) {
+        const r = cell.getBoundingClientRect();
+        return r.width >= r.height ? 'row' : 'col';
+      }
+    }
+    return 'row';
   }
 
   // ---- rendering ----------------------------------------------------------
@@ -158,11 +172,11 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     if (node) getPane(node.termId)?.focus();
   }
 
-  async function splitActive(dir: Dir): Promise<void> {
+  async function splitActive(dir: Dir, profileId?: string): Promise<void> {
     const activeId = focusedLeafId;
     if (!root || !activeId) return;
     maximizedId = null;
-    const node = await makeLeaf();
+    const node = await makeLeaf(profileId);
     // The focused leaf could have been closed while we awaited the new terminal — if so,
     // discard the freshly-spawned terminal rather than inserting an orphan leaf.
     if (!root || !findLeaf(root, activeId)) {
@@ -173,6 +187,10 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     focusedLeafId = node.id;
     render();
     focusLeaf(node.id);
+  }
+
+  async function addTerminal(profileId?: string): Promise<void> {
+    await splitActive(autoSplitDir(), profileId);
   }
 
   function closeActive(): void {
@@ -284,6 +302,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
   await initFirst();
 
   return {
+    addTerminal,
     dispose() {
       window.removeEventListener('keydown', onKeydown, { capture: true });
       if (root) for (const lf of collectLeaves(root)) getPane(lf.termId)?.dispose();

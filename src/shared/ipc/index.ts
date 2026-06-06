@@ -6,6 +6,9 @@ export * from './settings.contract';
 
 import type { SpawnRequest, SpawnResponse, ResizeRequest, KillRequest } from './control.contract';
 import type { SettingsApi } from './settings.contract';
+import type { ShellProfile } from '../domain/profile';
+
+export type { ShellProfile } from '../domain/profile';
 
 /**
  * The exact object exposed on `window.splitterm` by the preload contextBridge.
@@ -19,6 +22,7 @@ export interface SplittermApi {
     spawn(req: SpawnRequest): Promise<SpawnResponse>;
     resize(req: ResizeRequest): Promise<void>;
     kill(req: KillRequest): Promise<void>;
+    profiles(): Promise<ShellProfile[]>;
   };
   settings: SettingsApi;
   app: {

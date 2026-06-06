@@ -19,7 +19,7 @@ export interface TerminalInstance {
  * The element starts detached; the tiling engine appends it to a cell, at which point the
  * ResizeObserver fits it to the real size. M2 uses the DOM renderer; WebGL pooling lands in M2b.
  */
-export async function createTerminal(): Promise<TerminalInstance> {
+export async function createTerminal(profileId?: string): Promise<TerminalInstance> {
   const el = document.createElement('div');
   el.className = 'term-pane';
 
@@ -35,7 +35,7 @@ export async function createTerminal(): Promise<TerminalInstance> {
   term.loadAddon(fit);
   term.open(el);
 
-  const { id } = await ipc.pty.spawn({ cols: term.cols || 80, rows: term.rows || 24 });
+  const { id } = await ipc.pty.spawn({ cols: term.cols || 80, rows: term.rows || 24, profileId });
 
   registerTerminal(
     id,
