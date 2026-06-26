@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('splitterm', api);
 
 // A MessagePort can't cross contextBridge as a function arg, so forward it to the page via
 // window.postMessage with a transfer list. The renderer listens for this tagged message.
+// Pin the target origin to our own page (not '*') so the port can't be handed to a navigated-away
+// document — nav lockdown already prevents that, but the handshake shouldn't rely on a single guard.
 ipcRenderer.on(CONTROL_CHANNELS.ptyPort, (e) => {
-  window.postMessage({ __splittermPort: true }, '*', e.ports);
+  window.postMessage({ __splittermPort: true }, window.location.origin, e.ports);
 });
