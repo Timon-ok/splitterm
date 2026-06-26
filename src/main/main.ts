@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, type WebContents } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, session, type WebContents } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import started from 'electron-squirrel-startup';
@@ -14,6 +14,25 @@ if (started) {
 }
 
 const isMac = process.platform === 'darwin';
+
+// Content-Security-Policy delivered as a response header — stronger than the <meta> fallback in
+// index.html (it covers every response and can set header-only directives like frame-ancestors).
+// Local app shell, so 'self' only; 'unsafe-inline' for styles is required by xterm + design tokens.
+const CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+  "object-src 'none'; base-uri 'none'; frame-ancestors 'none';";
+
+const applyCspHeaders = (): void => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const u = details.url;
+    const isAppContent = u.startsWith('http://') || u.startsWith('https://') || u.startsWith('file://');
+    callback(
+      isAppContent
+        ? { responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [CSP] } }
+        : { responseHeaders: details.responseHeaders }, // leave devtools:// etc. untouched
+    );
+  });
+};
 
 // The only page the window should ever sit on: the dev-server origin in dev, or exactly the
 // packaged index.html in prod (pinned to one file, not the whole file: scheme — see nav-guard).
@@ -53,6 +72,7 @@ const createWindow = (): void => {
       sandbox: true,
       nodeIntegration: false,
       backgroundThrottling: false, // keep terminals rendering when unfocused
+      v8CacheOptions: 'code', // cache compiled JS for a faster cold start (pin the default explicitly)
     },
   });
 
@@ -89,6 +109,8 @@ onSettingsChange((settings) => {
 });
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null); // frameless terminal: no menu bar, and drop default accelerators (Ctrl+W…)
+  applyCspHeaders();
   startPtyHost();
   await loadSettings();
   syncUserProfiles(getSettings().profiles);

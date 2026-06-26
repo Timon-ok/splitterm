@@ -33,6 +33,7 @@ function failAll(): void {
 /** Install the window listener that receives the port bridged from preload. Call once at boot. */
 export function initPortBridge(): void {
   window.addEventListener('message', (e: MessageEvent) => {
+    if (e.source !== window) return; // only the preload's same-window handoff, never a foreign frame
     const tagged = e.data && (e.data as { __splittermPort?: boolean }).__splittermPort;
     const incoming = e.ports[0];
     if (tagged && incoming) attachPort(incoming);
