@@ -4,10 +4,16 @@ import type { TermId } from '@shared/ids';
 import type { PortLike, SpawnRequest, HostToRenderer } from '@shared/ipc';
 import { homeDir, sanitizedEnv, type ResolvedShell } from './shell-detect';
 
-// Watermark flow control: pause node-pty when the renderer is behind, resume when it catches up.
-// Bounds CPU + RAM under a flood (yes | cat). See plans/performance.md §5.
-const HIGH_WATER = 256 * 1024;
+// Watermark flow control: pause node-pty when the renderer is behind on acks, resume when it catches
+// up. Bounds CPU + RAM under a flood (yes | cat). Thresholds count UTF-16 code units (xterm string
+// length), NOT bytes — so the real memory bound runs ~2-3× higher for wide (e.g. CJK) output. Both
+// ends count the same unit, so the backpressure logic stays correct. See plans/performance.md §5.
+const HIGH_WATER = 256 * 1024; // code units (~chars), not bytes
 const LOW_WATER = 64 * 1024;
+
+// Wait this long after the shell's output goes quiet before sending a profile's startup command —
+// the first bytes are ConPTY/banner setup, not the prompt, and writing too early can drop it.
+const STARTUP_SETTLE_MS = 250;
 
 interface Session {
   pty: IPty;
@@ -83,17 +89,22 @@ export function spawnPty(id: TermId, opts: SpawnRequest, shell: ResolvedShell, s
   const session: Session = { pty, sent: 0, acked: 0, paused: false };
   sessions.set(id, session);
 
-  let startupSent = !startupCommand;
+  let startupArmed = !!startupCommand;
+  let startupTimer: ReturnType<typeof setTimeout> | null = null;
   pty.onData((data) => {
     post({ t: 'data', id, data });
-    // Run the profile's startup command once the shell has produced its first output (prompt ready).
-    if (!startupSent) {
-      startupSent = true;
-      try {
-        pty.write(`${startupCommand}\r`);
-      } catch {
-        /* shell already gone */
-      }
+    // Send the profile's startup command once output has settled (the prompt is ready) rather than on
+    // the first byte: re-arm a short timer on every chunk so it fires only after the shell goes quiet.
+    if (startupArmed) {
+      if (startupTimer) clearTimeout(startupTimer);
+      startupTimer = setTimeout(() => {
+        startupArmed = false;
+        try {
+          pty.write(`${startupCommand}\r`);
+        } catch {
+          /* shell already gone */
+        }
+      }, STARTUP_SETTLE_MS);
     }
     session.sent += data.length;
     if (!session.paused && session.sent - session.acked > HIGH_WATER) {
@@ -103,6 +114,7 @@ export function spawnPty(id: TermId, opts: SpawnRequest, shell: ResolvedShell, s
   });
 
   pty.onExit(({ exitCode, signal }) => {
+    if (startupTimer) clearTimeout(startupTimer); // never write into a shell that already exited
     post({ t: 'exit', id, code: exitCode, signal });
     sessions.delete(id);
   });
