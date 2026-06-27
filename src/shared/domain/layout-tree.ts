@@ -107,11 +107,19 @@ export const EMPTY_SESSION: SessionV1 = { v: 1, root: null, focusedLeafId: null,
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+// A generous ceiling on restored panes: a real layout never approaches it, but it stops a crafted
+// session.json from making the next launch spawn thousands of shells.
+const MAX_LEAVES = 100;
+
 // Coerce one persisted node. Returns null for anything malformed so the caller can drop the tree.
-function normalizeNode(n: unknown): LayoutNode | null {
+// `seen` enforces unique leaf ids (duplicates would corrupt focus/close bookkeeping) and, via its
+// size, the leaf cap.
+function normalizeNode(n: unknown, seen: Set<string>): LayoutNode | null {
   if (!isObj(n)) return null;
   if (n.type === 'leaf') {
     if (typeof n.id !== 'string' || !n.id) return null;
+    if (seen.has(n.id) || seen.size >= MAX_LEAVES) return null; // duplicate id or too many panes
+    seen.add(n.id);
     // termId is session-specific (the old pty is gone); keep a number but restore re-spawns anyway.
     return { type: 'leaf', id: n.id, termId: (typeof n.termId === 'number' ? n.termId : 0) as TermId };
   }
@@ -120,7 +128,7 @@ function normalizeNode(n: unknown): LayoutNode | null {
     if (!Array.isArray(n.children) || n.children.length < 2) return null;
     const children: LayoutNode[] = [];
     for (const c of n.children) {
-      const nc = normalizeNode(c);
+      const nc = normalizeNode(c, seen);
       if (!nc) return null; // any malformed child invalidates the whole split
       children.push(nc);
     }
@@ -137,15 +145,18 @@ function normalizeNode(n: unknown): LayoutNode | null {
 
 /**
  * The trust boundary for session.json (untrusted file input). Coerces the persisted blob onto
- * SessionV1, dropping the whole tree if the structure is malformed (a partial layout is riskier
- * than none). Never throws; always returns a valid SessionV1.
+ * SessionV1, dropping the whole tree if the structure is malformed, has duplicate/too-many leaves,
+ * etc. (a partial/oversized layout is riskier than none). Never throws; always returns a valid
+ * SessionV1.
  */
 export function normalizeSession(input: unknown): SessionV1 {
   if (!isObj(input) || input.v !== 1) return EMPTY_SESSION;
-  const root = input.root == null ? null : normalizeNode(input.root);
+  const root = input.root == null ? null : normalizeNode(input.root, new Set());
   if (input.root != null && root === null) return EMPTY_SESSION; // present but malformed → drop all
 
-  const leaves: SessionV1['leaves'] = {};
+  // Null-prototype map so an untrusted "__proto__" leaf key becomes a plain own property instead of
+  // reparenting the object (which would silently drop that leaf's metadata on the next save).
+  const leaves: SessionV1['leaves'] = Object.create(null) as SessionV1['leaves'];
   if (isObj(input.leaves)) {
     for (const [k, v] of Object.entries(input.leaves)) {
       if (!isObj(v)) continue;

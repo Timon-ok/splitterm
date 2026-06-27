@@ -94,13 +94,18 @@ initSettings()
     tiling = t;
     tiling.onChange((list) => sidebar.setSessions(list));
 
-    // Restore the previous layout (fresh shells in the saved cwds/profiles), THEN start persisting —
-    // so the restore itself doesn't trigger a redundant save.
+    // Restore the previous layout (fresh shells in the saved cwds/profiles) before subscribing the
+    // save, so the restore isn't immediately persisted back over itself.
     const saved = await ipc.session.get().catch(() => null);
     if (saved?.root) await t.restore(saved);
 
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let primed = false; // onChange fires once synchronously on subscribe — skip that initial no-op save
     const scheduleSave = (): void => {
+      if (!primed) {
+        primed = true;
+        return;
+      }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => ipc.session.save(t.serialize()), 400);
     };

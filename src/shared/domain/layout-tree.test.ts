@@ -124,4 +124,24 @@ describe('normalizeSession', () => {
     expect(s.leaves.a).toEqual({ profileId: 'p' }); // numeric cwd dropped
     expect(s.leaves.b).toBeUndefined();
   });
+
+  it('drops a tree with duplicate leaf ids (would corrupt focus/close bookkeeping)', () => {
+    const dup = { type: 'split', dir: 'row', children: [L('a'), L('a')], ratios: [0.5, 0.5] };
+    expect(normalizeSession({ v: 1, root: dup }).root).toBeNull();
+  });
+
+  it('drops a tree that exceeds the leaf cap', () => {
+    const children = Array.from({ length: 200 }, (_, i) => L(`leaf-${i}`));
+    const huge = { type: 'split', dir: 'row', children, ratios: children.map(() => 1 / children.length) };
+    expect(normalizeSession({ v: 1, root: huge }).root).toBeNull();
+  });
+
+  it('a "__proto__" leaf key becomes a real own property, not a prototype', () => {
+    // JSON.parse gives __proto__ as an own enumerable property (exactly how loadSession reads the file).
+    const input = JSON.parse('{"v":1,"root":{"type":"leaf","id":"a","termId":1},"leaves":{"__proto__":{"cwd":"C:/x"}}}');
+    const s = normalizeSession(input);
+    expect(Object.getPrototypeOf(s.leaves)).toBeNull(); // null-prototype map (no reparenting)
+    expect(Object.prototype.hasOwnProperty.call(s.leaves, '__proto__')).toBe(true);
+    expect((s.leaves as Record<string, { cwd?: string }>)['__proto__']).toEqual({ cwd: 'C:/x' });
+  });
 });

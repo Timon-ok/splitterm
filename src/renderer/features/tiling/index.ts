@@ -606,8 +606,11 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
 
   async function restore(session: SessionV1): Promise<void> {
     if (root || !session.root) return; // only restore into an empty tiling
-    // Rebuild the saved structure, spawning one fresh terminal per leaf (saved profile + cwd). Keep
-    // the saved leaf ids so the saved focused/maximized references stay valid.
+    // Rebuild the saved structure, spawning one fresh terminal per leaf (saved profile + cwd), keeping
+    // the saved leaf ids so the saved focused/maximized references stay valid. Track what we spawn so
+    // a mid-build spawn failure — or the user opening a terminal during the async window — can be
+    // cleaned up instead of leaking a pty or clobbering the user's pane.
+    const spawned: LeafNode[] = [];
     async function build(node: LayoutNode): Promise<LayoutNode> {
       if (node.type === 'leaf') {
         const meta = session.leaves[node.id] ?? {};
@@ -615,19 +618,42 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
         order.push(node.id);
         const n = parseInt(node.id.replace(/^leaf-/, ''), 10);
         if (Number.isFinite(n) && n > leafSeq) leafSeq = n; // keep future leaf ids from colliding
-        return { type: 'leaf', id: node.id, termId };
+        const lf: LeafNode = { type: 'leaf', id: node.id, termId };
+        spawned.push(lf);
+        return lf;
       }
       const children: LayoutNode[] = [];
       for (const c of node.children) children.push(await build(c));
       return { type: 'split', dir: node.dir, children, ratios: node.ratios };
     }
-    const built = await build(session.root);
+    const discard = (): void => {
+      for (const lf of spawned) {
+        const oi = order.indexOf(lf.id);
+        if (oi >= 0) order.splice(oi, 1);
+        getPane(lf.termId)?.dispose();
+      }
+    };
+
+    let built: LayoutNode;
+    try {
+      built = await build(session.root);
+    } catch {
+      discard(); // a spawn failed partway — drop the half-built panes, leave the tiling empty
+      return;
+    }
+    if (root) {
+      discard(); // the user opened a terminal while we were spawning — let theirs win, drop ours
+      return;
+    }
+
     root = built;
-    focusedLeafId =
-      session.focusedLeafId && findLeaf(built, session.focusedLeafId)
-        ? session.focusedLeafId
-        : (collectLeaves(built)[0]?.id ?? null);
     maximizedId = session.maximizedId && findLeaf(built, session.maximizedId) ? session.maximizedId : null;
+    // Only the maximized pane is mounted, so focus it; otherwise the saved focus (or the first leaf).
+    focusedLeafId =
+      maximizedId ??
+      (session.focusedLeafId && findLeaf(built, session.focusedLeafId)
+        ? session.focusedLeafId
+        : (collectLeaves(built)[0]?.id ?? null));
     render();
     if (focusedLeafId) focusLeaf(focusedLeafId);
   }

@@ -44,11 +44,17 @@ async function writeNow(): Promise<void> {
   }
 }
 
-/** Flush a pending write synchronously — call on quit so the final layout isn't lost to the debounce. */
+/**
+ * Write the latest session synchronously — call on quit so the final layout isn't lost to the
+ * debounce. Unconditional (not gated on a pending timer): on an app-initiated quit, a save that
+ * arrives during window teardown updates `current` with no timer of its own, and this still flushes
+ * it. Wire it on both before-quit and will-quit so a save landing between the two is still captured.
+ */
 export function flushSession(): void {
-  if (!writeTimer) return;
-  clearTimeout(writeTimer);
-  writeTimer = null;
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
   const target = filePath();
   const tmp = `${target}.tmp`;
   try {

@@ -103,7 +103,11 @@ ipcMain.handle(CONTROL_CHANNELS.clipboardWrite, (_e, text: unknown) => {
 });
 ipcMain.handle(CONTROL_CHANNELS.sessionGet, () => loadSession());
 ipcMain.on(CONTROL_CHANNELS.sessionSave, (_e, session: unknown) => saveSession(session));
-app.on('before-quit', () => flushSession()); // persist the final layout synchronously
+// Persist the final layout synchronously on quit. Both events: on a window-close quit the renderer's
+// pagehide save reaches main before before-quit; on an app-initiated quit (Cmd+Q) it can arrive after,
+// so will-quit (after windows tear down) gives that late save a second chance to be flushed.
+app.on('before-quit', () => flushSession());
+app.on('will-quit', () => flushSession());
 ipcMain.handle(CONTROL_CHANNELS.settingsGet, () => getSettings());
 ipcMain.handle(CONTROL_CHANNELS.settingsSet, (_e, patch: Partial<Settings>) => {
   setSettings(patch);
