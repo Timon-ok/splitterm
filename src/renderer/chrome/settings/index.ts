@@ -1,19 +1,21 @@
 // The dedicated settings modal: a JetBrains-style dialog with a left category rail and a content
 // panel. Opened from the topbar gear or Ctrl+,. Sections write through immediately (live-apply),
 // so there's no Save/Cancel — just Close. Content is (re)built on each open from a fresh snapshot.
-import { Palette, SquareTerminal, Boxes, X, type IconNode } from 'lucide';
+import { Palette, SquareTerminal, Boxes, SlidersHorizontal, X, type IconNode } from 'lucide';
 import { icon } from '../icons';
 import { ipc } from '@platform/ipc-client';
 import { getSettings } from '@platform/settings-controller';
 import { createAppearanceSection } from './appearance-section';
 import { createTerminalSection } from './terminal-section';
 import { createProfilesSection } from './profiles-section';
+import { createGeneralSection } from './general-section';
 
-type CategoryId = 'appearance' | 'terminal' | 'profiles';
+type CategoryId = 'appearance' | 'terminal' | 'profiles' | 'general';
 const CATEGORIES: { id: CategoryId; label: string; glyph: IconNode }[] = [
   { id: 'appearance', label: 'Appearance', glyph: Palette },
   { id: 'terminal', label: 'Terminal', glyph: SquareTerminal },
   { id: 'profiles', label: 'Profiles', glyph: Boxes },
+  { id: 'general', label: 'General', glyph: SlidersHorizontal },
 ];
 
 export interface SettingsModal {
@@ -120,7 +122,10 @@ export function createSettingsModal(): SettingsModal {
       body.replaceChildren(createAppearanceSection(s));
     } else if (active === 'terminal') {
       body.replaceChildren(createTerminalSection(s));
+    } else if (active === 'general') {
+      body.replaceChildren(createGeneralSection(s));
     } else {
+      // profiles — also needs the detected-shell list (async, generation-guarded)
       const shells = await ipc.pty.profiles().catch(() => []);
       if (gen !== rebuildSeq) return; // a newer rebuild started while we awaited — drop this one
       body.replaceChildren(createProfilesSection(getSettings(), shells));

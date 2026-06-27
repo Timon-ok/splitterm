@@ -29,6 +29,8 @@ export interface Settings {
   profiles: UserProfile[];
   /** id of the profile the "+" button opens (detected shell or user profile); '' = OS default shell */
   defaultProfileId: string;
+  /** reopen the previous window layout (fresh shells) on launch */
+  restoreSession: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -38,6 +40,7 @@ export const DEFAULTS: Settings = {
   terminal: { scrollback: 1000, cursorStyle: 'block', cursorBlink: true },
   profiles: [],
   defaultProfileId: '',
+  restoreSession: true,
 };
 
 // Clamp ranges for numeric fields. Bounds are defensive — wide enough to honor any sane user value,
@@ -122,5 +125,6 @@ export function normalize(input: unknown): Settings {
     // '' = no default (OS shell). Stored as-is (cross-checked against live profiles at launch time),
     // bounded so a garbage value can't bloat the file.
     defaultProfileId: typeof root.defaultProfileId === 'string' ? root.defaultProfileId.slice(0, 200) : '',
+    restoreSession: bool(root.restoreSession, DEFAULTS.restoreSession),
   };
 }
