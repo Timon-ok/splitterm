@@ -38,11 +38,26 @@ const sidebar = createSidebar(body, {
 
 const topbar = createTopbar({
   onToggleSidebar: () => sidebar.toggle(),
-  onNewTerminal: () => void tiling?.addTerminal(),
+  onNewTerminal: () => void openDefaultTerminal(),
   onPickProfile: (id, label) => void tiling?.addTerminal(id, label),
   onRemoveTerminal: () => tiling?.removeLast(),
   onOpenSettings: () => settingsModal.open(),
 });
+
+// The "+" opens the configured default profile. Resolve its display name here so the new pane is
+// titled with it (the host independently falls back to the same default if no profileId is passed,
+// so launching still works even before this resolves).
+async function openDefaultTerminal(): Promise<void> {
+  const [detected, settings] = await Promise.all([
+    ipc.pty.profiles().catch(() => []),
+    ipc.settings.get().catch(() => null),
+  ]);
+  const id = settings?.defaultProfileId ?? '';
+  const label = id
+    ? (detected.find((d) => d.id === id)?.label ?? settings?.profiles.find((p) => p.id === id)?.name ?? '')
+    : '';
+  await tiling?.addTerminal(id || undefined, label);
+}
 
 body.append(sidebar.panel, tilingHost); // column 1 = sidebar, column 2 = tiles
 

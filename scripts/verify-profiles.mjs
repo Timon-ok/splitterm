@@ -1,7 +1,7 @@
 // Runtime verification of custom profiles via the settings modal. Launches the built app with an
 // isolated userData dir, creates a "Claude" profile in Settings → Profiles (base shell + startup
-// command), then confirms it shows in the new-terminal dropdown, spawns with the right title, and
-// actually runs the startup command.
+// command), sets it as the "+" default, then confirms it persists, shows in the new-terminal
+// dropdown, and that pressing "+" opens it (right title + the startup command actually runs).
 import { _electron as electron } from 'playwright-core';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -48,7 +48,8 @@ try {
   await win.locator('.settings-dialog button[data-category="profiles"]').click();
   await sleep(300);
   await win.locator('.settings-dialog input[placeholder^="Name"]').fill('Claude');
-  const shellSel = win.locator('.settings-dialog select');
+  // The add-form shell select (the default-profile picker is a separate select outside the form).
+  const shellSel = win.locator('.settings-dialog form select');
   const optionValues = await shellSel.locator('option').evaluateAll((os2) => os2.map((o) => o.value));
   result.shellOptions = optionValues;
   if (optionValues[0]) await shellSel.selectOption(optionValues[0]);
@@ -57,33 +58,43 @@ try {
   await sleep(500);
   result.profileListedInModal = (await win.locator('.settings-dialog').getByText('Claude', { exact: true }).count()) > 0;
 
+  // 2) Set "Claude" as the "+" default via the Profiles section's default-profile picker.
+  await win.locator('.settings-dialog select[aria-label^="Default profile"]').selectOption({ label: 'Claude' });
+  await sleep(300);
+  const persisted = await win.evaluate(async () => {
+    const s = await window.splitterm.settings.get();
+    const claude = s.profiles.find((p) => p.name === 'Claude');
+    return { defaultProfileId: s.defaultProfileId, claudeId: claude ? claude.id : null };
+  });
+  result.defaultSetToClaude = persisted.claudeId != null && persisted.defaultProfileId === persisted.claudeId;
+
   // Close the modal (Escape).
   await win.keyboard.press('Escape');
   await sleep(300);
 
-  // 2) Open the ▾ dropdown and confirm the profile is listed.
+  // 3) Confirm the profile is listed in the ▾ dropdown.
   await win.getByRole('button', { name: 'Choose terminal profile' }).click();
   await sleep(500);
   const claudeItem = win.locator('button').filter({ hasText: 'Claude' });
   result.dropdownClaudeCount = await claudeItem.count();
   result.profileInDropdown = result.dropdownClaudeCount > 0;
+  await win.keyboard.press('Escape'); // close the dropdown without launching
+  await sleep(200);
 
-  if (result.profileInDropdown) {
-    // 3) Launch it and verify the pane title + that the startup command ran.
-    await claudeItem.first().click({ timeout: 5000 });
-    await sleep(800);
-    result.paneCount = await win.locator('[data-leaf-id]').count();
-    result.titleShown = (await win.locator('.pane-title', { hasText: 'Claude' }).count()) > 0;
+  // 4) Press "+" — it should open the default ("Claude"): right pane title + startup command runs.
+  await win.getByRole('button', { name: 'New terminal' }).click();
+  await sleep(800);
+  result.paneCount = await win.locator('[data-leaf-id]').count();
+  result.titleShown = (await win.locator('.pane-title', { hasText: 'Claude' }).count()) > 0;
 
-    let rowsText = '';
-    for (let i = 0; i < 30; i++) {
-      rowsText = await win.locator('.xterm-rows').first().innerText().catch(() => '');
-      if (/splitterm-marker/.test(rowsText)) break;
-      await sleep(300);
-    }
-    result.commandRan = /splitterm-marker/.test(rowsText);
-    result.rowsSample = rowsText.slice(0, 300);
+  let rowsText = '';
+  for (let i = 0; i < 30; i++) {
+    rowsText = await win.locator('.xterm-rows').first().innerText().catch(() => '');
+    if (/splitterm-marker/.test(rowsText)) break;
+    await sleep(300);
   }
+  result.commandRan = /splitterm-marker/.test(rowsText);
+  result.rowsSample = rowsText.slice(0, 300);
 
   await finish(0);
 } catch (err) {
