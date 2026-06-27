@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { asTermId } from '../ids';
-import { leaf, splitLeaf, closeLeaf, collectLeaves, findLeaf, type SplitNode } from './layout-tree';
+import {
+  leaf,
+  splitLeaf,
+  closeLeaf,
+  collectLeaves,
+  findLeaf,
+  normalizeSession,
+  EMPTY_SESSION,
+  type SplitNode,
+  type SessionV1,
+} from './layout-tree';
 
 const L = (id: string, t = 1) => leaf(id, asTermId(t));
 
@@ -52,5 +62,66 @@ describe('layout-tree', () => {
     root = splitLeaf(root, 'b', 'col', L('c'));
     expect(findLeaf(root, 'c')?.id).toBe('c');
     expect(findLeaf(root, 'zzz')).toBeNull();
+  });
+});
+
+describe('normalizeSession', () => {
+  it('returns the empty session for garbage / wrong version', () => {
+    expect(normalizeSession(null)).toEqual(EMPTY_SESSION);
+    expect(normalizeSession('nope')).toEqual(EMPTY_SESSION);
+    expect(normalizeSession({ v: 2, root: null })).toEqual(EMPTY_SESSION);
+    expect(normalizeSession({})).toEqual(EMPTY_SESSION);
+  });
+
+  it('accepts a null-root session (nothing to restore)', () => {
+    const s = normalizeSession({ v: 1, root: null, focusedLeafId: null, maximizedId: null, leaves: {} });
+    expect(s.root).toBeNull();
+  });
+
+  it('preserves a well-formed split tree, leaves, focus and maximized state', () => {
+    const input: SessionV1 = {
+      v: 1,
+      root: {
+        type: 'split',
+        dir: 'row',
+        children: [L('a', 1), L('b', 2)],
+        ratios: [0.3, 0.7],
+      },
+      focusedLeafId: 'b',
+      maximizedId: null,
+      leaves: { a: { cwd: 'C:/x', profileId: 'p1', title: 'A' }, b: { cwd: '/home' } },
+    };
+    const s = normalizeSession(input);
+    expect(s.root?.type).toBe('split');
+    expect(collectLeaves(s.root!).map((n) => n.id)).toEqual(['a', 'b']);
+    expect((s.root as SplitNode).ratios).toEqual([0.3, 0.7]);
+    expect(s.focusedLeafId).toBe('b');
+    expect(s.leaves.a).toEqual({ cwd: 'C:/x', profileId: 'p1', title: 'A' });
+  });
+
+  it('drops the whole tree when a node is malformed', () => {
+    expect(normalizeSession({ v: 1, root: { type: 'leaf' } }).root).toBeNull(); // leaf without id
+    expect(normalizeSession({ v: 1, root: { type: 'bogus' } }).root).toBeNull();
+    expect(
+      normalizeSession({ v: 1, root: { type: 'split', dir: 'row', children: [L('a')], ratios: [1] } }).root,
+    ).toBeNull(); // split needs >= 2 children
+  });
+
+  it('renormalizes bad ratios to an even split', () => {
+    const s = normalizeSession({
+      v: 1,
+      root: { type: 'split', dir: 'col', children: [L('a'), L('b')], ratios: [0, -1] },
+    });
+    expect((s.root as SplitNode).ratios).toEqual([0.5, 0.5]);
+  });
+
+  it('drops malformed leaf metadata but keeps the rest', () => {
+    const s = normalizeSession({
+      v: 1,
+      root: L('a'),
+      leaves: { a: { cwd: 5, profileId: 'p' }, b: 'nope' },
+    });
+    expect(s.leaves.a).toEqual({ profileId: 'p' }); // numeric cwd dropped
+    expect(s.leaves.b).toBeUndefined();
   });
 });

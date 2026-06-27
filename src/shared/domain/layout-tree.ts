@@ -99,5 +99,68 @@ export interface SessionV1 {
   root: LayoutNode | null;
   focusedLeafId: string | null;
   maximizedId: string | null;
-  leaves: Record<string, { cwd?: string; profileId?: string }>;
+  leaves: Record<string, { cwd?: string; profileId?: string; title?: string }>;
+}
+
+export const EMPTY_SESSION: SessionV1 = { v: 1, root: null, focusedLeafId: null, maximizedId: null, leaves: {} };
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// Coerce one persisted node. Returns null for anything malformed so the caller can drop the tree.
+function normalizeNode(n: unknown): LayoutNode | null {
+  if (!isObj(n)) return null;
+  if (n.type === 'leaf') {
+    if (typeof n.id !== 'string' || !n.id) return null;
+    // termId is session-specific (the old pty is gone); keep a number but restore re-spawns anyway.
+    return { type: 'leaf', id: n.id, termId: (typeof n.termId === 'number' ? n.termId : 0) as TermId };
+  }
+  if (n.type === 'split') {
+    if (n.dir !== 'row' && n.dir !== 'col') return null;
+    if (!Array.isArray(n.children) || n.children.length < 2) return null;
+    const children: LayoutNode[] = [];
+    for (const c of n.children) {
+      const nc = normalizeNode(c);
+      if (!nc) return null; // any malformed child invalidates the whole split
+      children.push(nc);
+    }
+    // Ratios: positive finite numbers, one per child, renormalized to sum 1; else even split.
+    const raw = Array.isArray(n.ratios) ? n.ratios : [];
+    let ratios = raw.filter((r): r is number => typeof r === 'number' && Number.isFinite(r) && r > 0);
+    if (ratios.length !== children.length) ratios = children.map(() => 1 / children.length);
+    const sum = ratios.reduce((a, b) => a + b, 0);
+    ratios = ratios.map((r) => r / sum);
+    return { type: 'split', dir: n.dir, children, ratios };
+  }
+  return null;
+}
+
+/**
+ * The trust boundary for session.json (untrusted file input). Coerces the persisted blob onto
+ * SessionV1, dropping the whole tree if the structure is malformed (a partial layout is riskier
+ * than none). Never throws; always returns a valid SessionV1.
+ */
+export function normalizeSession(input: unknown): SessionV1 {
+  if (!isObj(input) || input.v !== 1) return EMPTY_SESSION;
+  const root = input.root == null ? null : normalizeNode(input.root);
+  if (input.root != null && root === null) return EMPTY_SESSION; // present but malformed → drop all
+
+  const leaves: SessionV1['leaves'] = {};
+  if (isObj(input.leaves)) {
+    for (const [k, v] of Object.entries(input.leaves)) {
+      if (!isObj(v)) continue;
+      const entry: SessionV1['leaves'][string] = {};
+      if (typeof v.cwd === 'string') entry.cwd = v.cwd.slice(0, 4096);
+      if (typeof v.profileId === 'string') entry.profileId = v.profileId.slice(0, 200);
+      if (typeof v.title === 'string') entry.title = v.title.slice(0, 500);
+      leaves[k] = entry;
+    }
+  }
+  return {
+    v: 1,
+    root,
+    focusedLeafId: typeof input.focusedLeafId === 'string' ? input.focusedLeafId : null,
+    maximizedId: typeof input.maximizedId === 'string' ? input.maximizedId : null,
+    leaves,
+  };
 }
