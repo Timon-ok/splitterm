@@ -1,18 +1,41 @@
-// Profiles settings: create launchers (a base shell + optional startup command + name) that show
-// up in the new-terminal ▾ menu, spawn with that name as the title, and run the command on launch.
+// Profiles settings: pick which shell/profile the "+" button opens by default, and create launchers
+// (a base shell + optional startup command + name) that show up in the new-terminal ▾ menu, spawn
+// with that name as the title, and run the command on launch.
 import { Trash2 } from 'lucide';
 import { icon } from '../icons';
 import { ipc } from '@platform/ipc-client';
 import type { Settings } from '@shared/domain/settings.schema';
 import type { UserProfile } from '@shared/domain/profile';
 import type { ShellProfile } from '@shared/ipc';
-import { FIELD, sectionHeading, textControl } from './controls';
+import { FIELD, row, sectionHeading, selectControl, textControl } from './controls';
 
 export function createProfilesSection(initial: Settings, shells: ShellProfile[]): HTMLElement {
   let profiles = structuredClone(initial.profiles);
+  let currentDefault = initial.defaultProfileId; // which profile the "+" opens ('' = OS shell)
 
   const el = document.createElement('div');
   el.className = 'flex flex-col gap-2';
+
+  // ---- default-profile picker: the shell/profile the "+" button launches ----
+  const defaultHost = document.createElement('div');
+  const defaultOptions = (): { value: string; label: string }[] => [
+    { value: '', label: 'OS default shell' },
+    ...shells.map((s) => ({ value: s.id, label: s.label })),
+    ...profiles.map((p) => ({ value: p.id, label: p.name || 'Untitled profile' })),
+  ];
+  function renderDefault(): void {
+    // Rebuilt whenever the profile list changes so the just-added/removed profile is (de)selectable.
+    const sel = selectControl({
+      value: currentDefault,
+      options: defaultOptions(),
+      onChange: (v) => {
+        currentDefault = v;
+        void ipc.settings.set({ defaultProfileId: v });
+      },
+    });
+    sel.setAttribute('aria-label', 'Default profile for the new-terminal button');
+    defaultHost.replaceChildren(sel);
+  }
 
   const help = document.createElement('div');
   help.className = 'text-[11px] leading-snug text-[var(--text-disabled)]';
@@ -95,16 +118,21 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
     nameInput.value = '';
     cmdInput.value = '';
     renderList();
+    renderDefault(); // the new profile is now selectable as the "+" default
   }
 
   async function removeProfile(id: string): Promise<void> {
     profiles = profiles.filter((p) => p.id !== id);
     const patch: Partial<Settings> = { profiles };
-    // If this profile was the "+" default, clear the dangling reference atomically with the delete
-    // (otherwise defaultProfileId keeps pointing at a now-missing id and "+" silently falls back).
-    if (id === initial.defaultProfileId) patch.defaultProfileId = '';
+    // If this profile was the "+" default, clear the dangling reference in the same write (otherwise
+    // defaultProfileId keeps pointing at a now-missing id and "+" silently falls back to the OS shell).
+    if (id === currentDefault) {
+      patch.defaultProfileId = '';
+      currentDefault = '';
+    }
     await ipc.settings.set(patch);
     renderList();
+    renderDefault();
   }
 
   form.addEventListener('submit', (e) => {
@@ -113,6 +141,14 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
   });
 
   renderList();
-  el.append(sectionHeading('Profiles'), help, list, form);
+  renderDefault();
+  el.append(
+    sectionHeading('Default'),
+    row('New terminal opens', defaultHost, 'Which shell or profile the + button launches.'),
+    sectionHeading('Profiles'),
+    help,
+    list,
+    form,
+  );
   return el;
 }
