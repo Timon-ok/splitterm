@@ -43,6 +43,7 @@ describe('normalize', () => {
       terminal: { scrollback: 5000, cursorStyle: 'bar' as const, cursorBlink: false },
       profiles: [{ id: 'p1', name: 'Claude', baseShellId: 'pwsh', startupCommand: 'claude' }],
       defaultProfileId: 'p1',
+      restoreSession: false,
     };
     expect(normalize(valid)).toEqual(valid);
   });
@@ -54,6 +55,13 @@ describe('normalize', () => {
       expect(normalize({ defaultProfileId }).defaultProfileId).toBe(''));
     it('bounds the length', () =>
       expect(normalize({ defaultProfileId: 'x'.repeat(500) }).defaultProfileId).toHaveLength(200));
+  });
+
+  describe('restoreSession', () => {
+    it('defaults to true', () => expect(normalize({}).restoreSession).toBe(true));
+    it('keeps a boolean', () => expect(normalize({ restoreSession: false }).restoreSession).toBe(false));
+    it.each([1, 'yes', null, {}])('falls back to default for non-boolean %p', (restoreSession) =>
+      expect(normalize({ restoreSession }).restoreSession).toBe(true));
   });
 
   it('is idempotent', () => {
@@ -78,6 +86,7 @@ describe('normalize', () => {
       'defaultProfileId',
       'font',
       'profiles',
+      'restoreSession',
       'schemaVersion',
       'terminal',
     ]);

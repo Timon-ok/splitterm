@@ -7,7 +7,7 @@ import '../styles/tokens.css';
 import '../styles/base.css';
 import { ipc } from '@platform/ipc-client';
 import { initPortBridge } from '@platform/pty-port';
-import { initSettings } from '@platform/settings-controller';
+import { initSettings, getSettings } from '@platform/settings-controller';
 import { createTiling, type Tiling } from '@features/tiling';
 import { createTopbar } from '../chrome/topbar';
 import { createSidebar } from '../chrome/sidebar';
@@ -95,9 +95,11 @@ initSettings()
     tiling.onChange((list) => sidebar.setSessions(list));
 
     // Restore the previous layout (fresh shells in the saved cwds/profiles) before subscribing the
-    // save, so the restore isn't immediately persisted back over itself.
-    const saved = await ipc.session.get().catch(() => null);
-    if (saved?.root) await t.restore(saved);
+    // save, so the restore isn't immediately persisted back over itself. Gated on the user setting.
+    if (getSettings().restoreSession) {
+      const saved = await ipc.session.get().catch(() => null);
+      if (saved?.root) await t.restore(saved);
+    }
 
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     let primed = false; // onChange fires once synchronously on subscribe — skip that initial no-op save
