@@ -7,6 +7,7 @@ import { asTermId, type TermId } from '@shared/ids';
 let host: UtilityProcess | null = null;
 let hostReady = false;
 let shuttingDown = false;
+let gaveUp = false; // the host crash-looped past MAX_RAPID_RESTARTS — stop accepting spawns
 let nextId = 1;
 let profiles: ShellProfile[] = [];
 let userProfiles: UserProfile[] = [];
@@ -77,6 +78,7 @@ function scheduleRestart(): void {
   rapidRestarts++;
   if (rapidRestarts > MAX_RAPID_RESTARTS) {
     console.error('[pty-supervisor] pty-host keeps crashing on startup; giving up until app restart.');
+    gaveUp = true; // new spawns now get hostDown so the pane banners instead of hanging
     return;
   }
   const delay = Math.min(2000, 250 * rapidRestarts);
@@ -92,6 +94,7 @@ export function startPtyHost(): void {
   // Handlers are registered ONCE here — re-registering them on a respawn throws "second handler".
   ipcMain.handle(CONTROL_CHANNELS.ptySpawn, (_e, req: SpawnRequest): SpawnResponse => {
     const id = asTermId(nextId++);
+    if (gaveUp) return { id, hostDown: true }; // host is down for good — let the renderer banner the pane
     if (hostReady && host) host.postMessage({ type: 'spawn', id, opts: req });
     else if (pendingSpawns.length < MAX_PENDING) pendingSpawns.push({ id, opts: req }); // replay on respawn
     return { id };

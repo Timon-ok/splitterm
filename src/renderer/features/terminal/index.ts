@@ -3,7 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import type { TermId } from '@shared/ids';
 import { ipc } from '@platform/ipc-client';
-import { registerTerminal, unregisterTerminal, writeToPty, resizePty, ackPty } from '@platform/pty-port';
+import { registerTerminal, unregisterTerminal, writeToPty, resizePty, ackPty, whenPortReady } from '@platform/pty-port';
 import { registerPane, deletePane } from '@platform/pane-registry';
 import { getSettings } from '@platform/settings-controller';
 import { readTerminalTheme } from './theme';
@@ -71,13 +71,21 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
     return true;
   });
 
-  const { id } = await ipc.pty.spawn({
+  // Wait for the firehose port before spawning, so a spawn during the reload gap can't race the
+  // host's orphan-kill (the new session would be created against a stale port and killed).
+  await whenPortReady();
+  const { id, hostDown } = await ipc.pty.spawn({
     cols: term.cols || 80,
     rows: term.rows || 24,
     profileId,
     cwd,
     shellIntegration: s.terminal.shellIntegration,
   });
+  // The pty-host crash-looped and gave up: there's no live shell, so banner the pane (it stays
+  // closeable) instead of leaving it blank and frozen.
+  if (hostDown) {
+    term.write('\r\n\x1b[1;31m[pty-host unavailable — restart splitterm to use terminals again.]\x1b[0m\r\n');
+  }
 
   registerTerminal(
     id,
