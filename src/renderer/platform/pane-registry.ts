@@ -7,8 +7,10 @@ import type { Settings } from '@shared/domain/settings.schema';
 export interface PaneHandle {
   /** stable element the tiling engine re-parents between cells (never remounted) */
   el: HTMLElement;
-  /** display title for the pane (e.g. the launch profile name); '' = none */
+  /** PERSISTENT title (the launch profile name); '' = none. Saved for session restore. */
   title: string;
+  /** the title to SHOW — the profile `title` when set, else the shell's live OSC 0/2 title (chip + sidebar) */
+  displayTitle(): string;
   /** the profile id this pane was launched with (for session restore); undefined = default shell */
   profileId?: string;
   focus(): void;
@@ -38,4 +40,19 @@ export function allPanes(): PaneHandle[] {
 
 export function deletePane(id: TermId): void {
   panes.delete(id);
+}
+
+// The shell can change a pane's title at any time (OSC 0/2). Terminals notify here; the tiling engine
+// subscribes to refresh the pane chip + Sessions sidebar live, without a full relayout.
+const titleListeners = new Set<(id: TermId) => void>();
+
+/** Subscribe to live pane-title changes. Returns an unsubscribe function. */
+export function onPaneTitleChange(cb: (id: TermId) => void): () => void {
+  titleListeners.add(cb);
+  return () => titleListeners.delete(cb);
+}
+
+/** Notify subscribers that pane `id`'s display title changed. */
+export function notifyPaneTitleChange(id: TermId): void {
+  for (const cb of titleListeners) cb(id);
 }
