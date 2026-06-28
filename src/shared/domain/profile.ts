@@ -10,6 +10,12 @@ export interface UserProfile {
   name: string;
   /** id of the detected shell this profile launches on (e.g. 'pwsh') */
   baseShellId: string;
-  /** optional command run once the shell is ready (e.g. 'claude') */
-  startupCommand?: string;
+  /** commands run in order once the shell is ready on a FRESH open (e.g. ['claude']) */
+  startupCommands?: string[];
+  /**
+   * commands run in order when the pane is reopened via session restore, instead of startupCommands
+   * (e.g. ['claude --continue']). Falls back to startupCommands when unset, so existing profiles keep
+   * their current behavior.
+   */
+  restoreCommands?: string[];
 }

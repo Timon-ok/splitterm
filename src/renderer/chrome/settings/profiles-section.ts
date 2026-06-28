@@ -7,7 +7,13 @@ import { ipc } from '@platform/ipc-client';
 import type { Settings } from '@shared/domain/settings.schema';
 import type { UserProfile } from '@shared/domain/profile';
 import type { ShellProfile } from '@shared/ipc';
-import { FIELD, row, sectionHeading, selectControl, textControl } from './controls';
+import { FIELD, row, sectionHeading, selectControl, textControl, textareaControl } from './controls';
+
+/** Split a textarea's lines into a trimmed command list, or undefined when empty. */
+function linesToCommands(text: string): string[] | undefined {
+  const out = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  return out.length > 0 ? out : undefined;
+}
 
 export function createProfilesSection(initial: Settings, shells: ShellProfile[]): HTMLElement {
   let profiles = structuredClone(initial.profiles);
@@ -40,8 +46,8 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
   const help = document.createElement('div');
   help.className = 'text-[11px] leading-snug text-[var(--text-disabled)]';
   help.textContent =
-    'Each profile appears in the new-terminal ▾ menu. Example: "Claude" on PowerShell with the ' +
-    'startup command "claude".';
+    'Each profile appears in the new-terminal ▾ menu. Startup commands run on a fresh terminal; ' +
+    'restore commands run instead when the session reopens — e.g. startup "claude", restore "claude --continue".';
 
   const list = document.createElement('div');
   list.className = 'flex flex-col gap-1';
@@ -61,16 +67,21 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
     opt.textContent = s.label;
     shellSelect.append(opt);
   }
-  const cmdInput = textControl({ value: '', placeholder: 'Startup command (optional, e.g. claude)', onChange: () => {} });
-  cmdInput.classList.remove('min-w-[240px]');
-  cmdInput.setAttribute('aria-label', 'Startup command');
+  const startupArea = textareaControl({ value: '', placeholder: 'Startup commands — one per line (e.g. claude)', onChange: () => {} });
+  startupArea.setAttribute('aria-label', 'Startup commands');
+  const restoreArea = textareaControl({
+    value: '',
+    placeholder: 'On restore — one per line (e.g. claude --continue); blank = same as startup',
+    onChange: () => {},
+  });
+  restoreArea.setAttribute('aria-label', 'Restore commands');
   const addBtn = document.createElement('button');
   addBtn.type = 'submit';
   addBtn.className =
     'h-7 rounded-[var(--r-sm)] bg-[var(--accent)] text-[var(--accent-text)] text-[12px] font-medium ' +
     'cursor-pointer hover:bg-[var(--accent-hover)] transition-colors ease-[var(--ease-out)] duration-[var(--motion-fast)]';
   addBtn.textContent = 'Add profile';
-  form.append(nameInput, shellSelect, cmdInput, addBtn);
+  form.append(nameInput, shellSelect, startupArea, restoreArea, addBtn);
 
   function renderList(): void {
     if (profiles.length === 0) {
@@ -94,7 +105,9 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
     const sub = document.createElement('div');
     sub.className = 'text-[10px] text-[var(--text-disabled)] truncate';
     const shellLabel = shells.find((s) => s.id === p.baseShellId)?.label ?? p.baseShellId;
-    sub.textContent = shellLabel + (p.startupCommand ? ` · ${p.startupCommand}` : '');
+    const startup = p.startupCommands?.join('; ');
+    const restore = p.restoreCommands?.join('; ');
+    sub.textContent = shellLabel + (startup ? ` · ${startup}` : '') + (restore ? ` · ⟳ ${restore}` : '');
     text.append(name, sub);
     const del = document.createElement('button');
     del.type = 'button';
@@ -112,11 +125,16 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
     const name = nameInput.value.trim();
     const baseShellId = shellSelect.value;
     if (!name || !baseShellId) return;
-    const startupCommand = cmdInput.value.trim() || undefined;
-    profiles = [...profiles, { id: crypto.randomUUID(), name, baseShellId, startupCommand }];
+    const profile: UserProfile = { id: crypto.randomUUID(), name, baseShellId };
+    const startupCommands = linesToCommands(startupArea.value);
+    if (startupCommands) profile.startupCommands = startupCommands;
+    const restoreCommands = linesToCommands(restoreArea.value);
+    if (restoreCommands) profile.restoreCommands = restoreCommands;
+    profiles = [...profiles, profile];
     await ipc.settings.set({ profiles });
     nameInput.value = '';
-    cmdInput.value = '';
+    startupArea.value = '';
+    restoreArea.value = '';
     renderList();
     renderDefault(); // the new profile is now selectable as the "+" default
   }

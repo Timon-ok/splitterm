@@ -23,7 +23,7 @@ export interface TerminalInstance {
  * The element starts detached; the tiling engine appends it to a cell, at which point the
  * ResizeObserver fits it to the real size. M2 uses the DOM renderer; WebGL pooling lands in M2b.
  */
-export async function createTerminal(profileId?: string, title = '', initialCwd?: string): Promise<TerminalInstance> {
+export async function createTerminal(profileId?: string, title = '', initialCwd?: string, restore = false): Promise<TerminalInstance> {
   const el = document.createElement('div');
   el.className = 'term-pane';
 
@@ -87,6 +87,7 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
     profileId,
     cwd,
     shellIntegration: s.terminal.shellIntegration,
+    restore,
   });
   // The pty-host crash-looped and gave up: there's no live shell, so banner the pane (it stays
   // closeable) instead of leaving it blank and frozen.

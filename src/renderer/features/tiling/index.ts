@@ -690,7 +690,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     async function build(node: LayoutNode): Promise<LayoutNode> {
       if (node.type === 'leaf') {
         const meta = session.leaves[node.id] ?? {};
-        const { termId } = await createTerminal(meta.profileId, meta.title ?? '', meta.cwd);
+        const { termId } = await createTerminal(meta.profileId, meta.title ?? '', meta.cwd, true); // restore → profile's restore sequence
         order.push(node.id);
         const n = parseInt(node.id.replace(/^leaf-/, ''), 10);
         if (Number.isFinite(n) && n > leafSeq) leafSeq = n; // keep future leaf ids from colliding

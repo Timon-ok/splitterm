@@ -65,7 +65,7 @@ function resolveCwd(cwd: string | undefined): string {
   return homeDir();
 }
 
-export function spawnPty(id: TermId, opts: SpawnRequest, shell: ResolvedShell, startupCommand?: string): void {
+export function spawnPty(id: TermId, opts: SpawnRequest, shell: ResolvedShell, startupCommands?: string[]): void {
   // Optionally inject OSC 7 cwd reporting into PowerShell (so cwd-on-split works on a stock prompt).
   const eff = withShellIntegration(shell, opts.shellIntegration ?? false);
   let pty: IPty;
@@ -92,18 +92,19 @@ export function spawnPty(id: TermId, opts: SpawnRequest, shell: ResolvedShell, s
   const session: Session = { pty, sent: 0, acked: 0, paused: false };
   sessions.set(id, session);
 
-  let startupArmed = !!startupCommand;
+  let startupArmed = !!(startupCommands && startupCommands.length > 0);
   let startupTimer: ReturnType<typeof setTimeout> | null = null;
   pty.onData((data) => {
     post({ t: 'data', id, data });
-    // Send the profile's startup command once output has settled (the prompt is ready) rather than on
+    // Send the profile's startup sequence once output has settled (the prompt is ready) rather than on
     // the first byte: re-arm a short timer on every chunk so it fires only after the shell goes quiet.
+    // The shell buffers stdin, so writing the commands back-to-back runs them in order.
     if (startupArmed) {
       if (startupTimer) clearTimeout(startupTimer);
       startupTimer = setTimeout(() => {
         startupArmed = false;
         try {
-          pty.write(`${startupCommand}\r`);
+          for (const cmd of startupCommands ?? []) pty.write(`${cmd}\r`);
         } catch {
           /* shell already gone */
         }

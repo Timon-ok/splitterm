@@ -41,7 +41,7 @@ describe('normalize', () => {
       appearance: { theme: 'Light', followOS: false, reduceMotion: true },
       font: { family: 'Fira Code', size: 16 },
       terminal: { scrollback: 5000, cursorStyle: 'bar' as const, cursorBlink: false, shellIntegration: false, webgl: true },
-      profiles: [{ id: 'p1', name: 'Claude', baseShellId: 'pwsh', startupCommand: 'claude' }],
+      profiles: [{ id: 'p1', name: 'Claude', baseShellId: 'pwsh', startupCommands: ['claude'], restoreCommands: ['claude --continue'] }],
       defaultProfileId: 'p1',
       restoreSession: false,
     };
@@ -163,25 +163,41 @@ describe('normalize', () => {
         { id: 'a', name: 'n', baseShellId: 'b' },
       ]));
 
-    // SECURITY: startupCommand is written to the pty verbatim — a newline would inject a 2nd command.
-    it('forces startupCommand to a single line (strips injected commands)', () =>
+    // SECURITY: each command is written to the pty verbatim — a newline would inject a 2nd command.
+    it('forces each command in the sequence to a single line (strips injected commands)', () =>
       expect(
         normalize({
-          profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 'echo hi\nrm -rf /\r\nshutdown' }],
+          profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommands: ['echo hi\nrm -rf /', 'ls\r\nshutdown'] }],
         }).profiles,
-      ).toEqual([{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 'echo hi' }]));
+      ).toEqual([{ id: 'a', name: 'n', baseShellId: 'b', startupCommands: ['echo hi', 'ls'] }]));
 
-    it('omits startupCommand when it is not a string', () =>
-      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 123 }] }).profiles).toEqual([
-        { id: 'a', name: 'n', baseShellId: 'b' },
+    it('folds a legacy single startupCommand into startupCommands', () =>
+      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 'claude' }] }).profiles).toEqual([
+        { id: 'a', name: 'n', baseShellId: 'b', startupCommands: ['claude'] },
       ]));
 
-    it('omits startupCommand that is empty after stripping the first newline', () =>
-      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: '\nrm -rf /' }] }).profiles).toEqual([
-        { id: 'a', name: 'n', baseShellId: 'b' },
-      ]));
+    it('prefers startupCommands over a legacy startupCommand when both are present', () =>
+      expect(
+        normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 'legacy', startupCommands: ['new'] }] })
+          .profiles[0]?.startupCommands,
+      ).toEqual(['new']));
 
-    it('bounds startupCommand length', () =>
-      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommand: 'x'.repeat(5000) }] }).profiles[0]?.startupCommand).toHaveLength(2000));
+    it('coerces restoreCommands the same way (single-line, dropped when empty)', () => {
+      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', restoreCommands: ['claude --continue\nrm'] }] }).profiles[0]?.restoreCommands).toEqual(['claude --continue']);
+      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', restoreCommands: [] }] }).profiles[0]?.restoreCommands).toBeUndefined();
+    });
+
+    it('omits a command list that is not an array / has no usable strings', () => {
+      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommands: 'claude' }] }).profiles[0]?.startupCommands).toBeUndefined();
+      expect(normalize({ profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommands: [123, '', '\n'] }] }).profiles[0]?.startupCommands).toBeUndefined();
+    });
+
+    it('bounds each command length and caps the sequence length', () => {
+      const p = normalize({
+        profiles: [{ id: 'a', name: 'n', baseShellId: 'b', startupCommands: [...Array(30).fill('x'.repeat(5000))] }],
+      }).profiles[0];
+      expect(p?.startupCommands).toHaveLength(20); // MAX_COMMANDS
+      expect(p?.startupCommands?.[0]).toHaveLength(2000); // STARTUP_COMMAND_MAX
+    });
   });
 });

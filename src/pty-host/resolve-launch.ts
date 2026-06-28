@@ -4,13 +4,15 @@ import type { UserProfile } from '@shared/domain/profile';
 import type { ResolvedShell, ShellProfileFull } from './shell-detect';
 
 export interface ResolvedLaunch extends ResolvedShell {
-  startupCommand?: string;
+  startupCommands?: string[];
 }
 
 /**
- * Resolve a profile id (a detected shell OR a user profile) to a launchable shell + startup command.
- * With no explicit id (the "+" button), fall back to the configured default profile, then the OS
- * shell (`fallback`). A user profile whose base shell can't be found also uses the fallback. Pure.
+ * Resolve a profile id (a detected shell OR a user profile) to a launchable shell + the command
+ * sequence to run once it's ready. With no explicit id (the "+" button), fall back to the configured
+ * default profile, then the OS shell (`fallback`). A user profile whose base shell can't be found also
+ * uses the fallback. When `restore` is true, a profile's `restoreCommands` are used instead of its
+ * `startupCommands` (falling back to startup when no restore sequence is set). Pure.
  */
 export function resolveLaunch(
   profileId: string | undefined,
@@ -18,6 +20,7 @@ export function resolveLaunch(
   userProfiles: UserProfile[],
   defaultProfileId: string,
   fallback: () => ResolvedShell,
+  restore = false,
 ): ResolvedLaunch {
   const effective = profileId || defaultProfileId;
   if (effective) {
@@ -27,7 +30,8 @@ export function resolveLaunch(
     if (user) {
       const base = detected.find((x) => x.id === user.baseShellId);
       const baseShell = base ? { file: base.file, args: base.args } : fallback();
-      return { ...baseShell, startupCommand: user.startupCommand };
+      const startupCommands = restore && user.restoreCommands?.length ? user.restoreCommands : user.startupCommands;
+      return { ...baseShell, startupCommands };
     }
     console.warn(`[pty-host] unknown profile "${effective}", using default shell`);
   }
