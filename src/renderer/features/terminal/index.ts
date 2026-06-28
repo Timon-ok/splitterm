@@ -10,6 +10,7 @@ import { readTerminalTheme } from './theme';
 import { createTerminalSearch } from './search';
 import { createTerminalClipboard } from './clipboard';
 import { parseOsc7 } from './osc7';
+import { tryAttachWebgl } from './webgl';
 
 export interface TerminalInstance {
   termId: TermId;
@@ -43,6 +44,11 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);
+
+  // GPU renderer (opt-in). Must load AFTER open() — it needs the live canvas. Returns null and stays
+  // on the DOM renderer when WebGL is off, unavailable, or the context budget is full; self-disposes
+  // on context loss. Tracked so the pane releases its context on close.
+  const webgl = s.terminal.webgl ? tryAttachWebgl(term) : null;
 
   // Track the cwd the shell reports via OSC 7 (`ESC ]7;file://host/path BEL`).
   const osc7 = term.parser.registerOscHandler(7, (data) => {
@@ -134,6 +140,7 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
       osc7.dispose();
       search.dispose();
       clip.dispose();
+      webgl?.dispose(); // free the GPU context before the terminal so it returns to the budget
       unregisterTerminal(id);
       ipc.pty.kill({ id });
       term.dispose();

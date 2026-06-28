@@ -40,7 +40,7 @@ describe('normalize', () => {
       schemaVersion: 1,
       appearance: { theme: 'Light', followOS: false, reduceMotion: true },
       font: { family: 'Fira Code', size: 16 },
-      terminal: { scrollback: 5000, cursorStyle: 'bar' as const, cursorBlink: false, shellIntegration: false },
+      terminal: { scrollback: 5000, cursorStyle: 'bar' as const, cursorBlink: false, shellIntegration: false, webgl: true },
       profiles: [{ id: 'p1', name: 'Claude', baseShellId: 'pwsh', startupCommand: 'claude' }],
       defaultProfileId: 'p1',
       restoreSession: false,
@@ -108,6 +108,13 @@ describe('normalize', () => {
       expect(normalize({ terminal: { scrollback: 100.9 } }).terminal.scrollback).toBe(100));
     it('falls back for a string', () =>
       expect(normalize({ terminal: { scrollback: '1000' } }).terminal.scrollback).toBe(DEFAULTS.terminal.scrollback));
+  });
+
+  describe('terminal.webgl', () => {
+    it('defaults to false (opt-in)', () => expect(normalize({}).terminal.webgl).toBe(false));
+    it('keeps a boolean', () => expect(normalize({ terminal: { webgl: true } }).terminal.webgl).toBe(true));
+    it.each([1, 'true', null, {}])('falls back to the default for non-boolean %p', (webgl) =>
+      expect(normalize({ terminal: { webgl } }).terminal.webgl).toBe(DEFAULTS.terminal.webgl));
   });
 
   describe('terminal.cursorStyle', () => {

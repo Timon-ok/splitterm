@@ -93,6 +93,18 @@ export function createTerminalSection(initial: Settings): HTMLElement {
       }),
       'Report the working directory from PowerShell (OSC 7) so a split opens in the same folder. Applies to new terminals.',
     ),
+    sectionHeading('Rendering'),
+    row(
+      'GPU acceleration',
+      toggle({
+        checked: local.terminal.webgl,
+        onChange: (v) => {
+          local.terminal.webgl = v;
+          saveTerm();
+        },
+      }),
+      'Render terminals on the GPU (WebGL) for smoother output under heavy load. Falls back to the standard renderer when unavailable. Applies to new terminals.',
+    ),
   );
   return el;
 }
