@@ -52,6 +52,10 @@ const lockNavigation = (contents: WebContents): void => {
   contents.on('will-redirect', (e, url) => {
     if (!isAppUrl(url)) e.preventDefault();
   });
+  // Defense-in-depth: also block a subframe (iframe) from navigating off the app's own page.
+  contents.on('will-frame-navigate', (e) => {
+    if (!isAppUrl(e.url)) e.preventDefault();
+  });
 };
 
 const createWindow = (): void => {

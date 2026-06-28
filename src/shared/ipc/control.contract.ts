@@ -14,6 +14,8 @@ export interface SpawnRequest {
 }
 export interface SpawnResponse {
   id: TermId;
+  /** the pty-host has crash-looped and given up; no firehose output will arrive — banner the pane */
+  hostDown?: boolean;
 }
 
 export interface KillRequest {

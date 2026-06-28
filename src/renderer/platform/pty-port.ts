@@ -11,10 +11,30 @@ interface TerminalHandlers {
   onExit: (code: number) => void;
 }
 
+// Per-terminal buffer: data chunks, plus a terminal exit code once the session ends. Both are flushed
+// on the same rAF so `exit` is delivered AFTER any data buffered before it (otherwise a spawn-failure
+// banner — sent as data then exit — could render the "[process exited]" line before the error).
+interface Pending {
+  chunks: string[];
+  exit?: number;
+}
+
 const handlers = new Map<number, TerminalHandlers>();
-const pending = new Map<number, string[]>();
+const pending = new Map<number, Pending>();
 let port: MessagePort | null = null;
 let rafScheduled = false;
+
+// Resolves once the firehose port has attached. Spawning before then (e.g. a "+" click or a session
+// restore during the renderer's reload gap) would race the host's orphan-kill and lose the pane, so
+// callers await this first. A timeout unblocks spawns even if the bridge never arrives.
+let markPortReady!: () => void;
+const portReady = new Promise<void>((resolve) => {
+  markPortReady = resolve;
+  setTimeout(resolve, 5000);
+});
+export function whenPortReady(): Promise<void> {
+  return portReady;
+}
 
 const HOST_CRASH_BANNER = '\r\n\x1b[1;31m[pty-host crashed — this terminal ended. Open a new one.]\x1b[0m\r\n';
 
@@ -49,16 +69,26 @@ function attachPort(p: MessagePort): void {
     if (msg) onMessage(msg);
   };
   p.start();
+  markPortReady(); // unblock any spawns that were waiting for the port
+}
+
+function bufFor(id: number): Pending {
+  let buf = pending.get(id);
+  if (!buf) {
+    buf = { chunks: [] };
+    pending.set(id, buf);
+  }
+  return buf;
 }
 
 function onMessage(msg: HostToRenderer): void {
   if (msg.t === 'data') {
-    const buf = pending.get(msg.id) ?? [];
-    buf.push(msg.data);
-    pending.set(msg.id, buf);
+    bufFor(msg.id).chunks.push(msg.data);
     scheduleFlush();
   } else if (msg.t === 'exit') {
-    handlers.get(msg.id)?.onExit(msg.code);
+    // Buffer the exit too, so it lands after the data that preceded it on the next flush.
+    bufFor(msg.id).exit = msg.code;
+    scheduleFlush();
   }
 }
 
@@ -70,12 +100,23 @@ function scheduleFlush(): void {
 
 function flush(): void {
   rafScheduled = false;
-  for (const [id, chunks] of pending) {
+  for (const [id, buf] of pending) {
     const handler = handlers.get(id);
-    // Keep buffering if the terminal hasn't registered yet (avoids dropping early output).
-    if (!handler || chunks.length === 0) continue;
-    handler.onData(chunks.join(''));
-    pending.set(id, []);
+    if (!handler) {
+      // No handler: a buffered exit means the pane is already gone (its kill's exit arrived after
+      // unregister re-created the entry) — reap it so closed terminals don't leak. Plain early data
+      // with no exit stays buffered until the terminal registers.
+      if (buf.exit !== undefined) pending.delete(id);
+      continue;
+    }
+    if (buf.chunks.length > 0) {
+      handler.onData(buf.chunks.join(''));
+      buf.chunks = [];
+    }
+    if (buf.exit !== undefined) {
+      handler.onExit(buf.exit);
+      pending.delete(id); // session ended — nothing more will arrive for this id
+    }
   }
 }
 
