@@ -700,15 +700,18 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
       }
     };
 
-    try {
-      await Promise.all(
-        sessionLeaves.map(async (ln) => {
-          const meta = session.leaves[ln.id] ?? {};
-          const { termId } = await createTerminal(meta.profileId, meta.title ?? '', meta.cwd, true); // restore → profile's restore sequence
-          created.push({ id: ln.id, termId }); // track the moment it exists, for cleanup
-        }),
-      );
-    } catch {
+    // allSettled, not all: if one spawn rejects, its siblings are still in flight. We must let them
+    // ALL settle so created[] is complete before discard() runs — otherwise a late-resolving spawn
+    // would register a live pty AFTER cleanup and leak it. (Today the spawn path resolves even on host
+    // failure — it returns hostDown rather than throwing — but restore's cleanup must not depend on that.)
+    const settled = await Promise.allSettled(
+      sessionLeaves.map(async (ln) => {
+        const meta = session.leaves[ln.id] ?? {};
+        const { termId } = await createTerminal(meta.profileId, meta.title ?? '', meta.cwd, true); // restore → profile's restore sequence
+        created.push({ id: ln.id, termId }); // track the moment it exists, for cleanup
+      }),
+    );
+    if (settled.some((s) => s.status === 'rejected')) {
       discard(); // a spawn failed — drop whatever was created, leave the tiling empty
       return;
     }
