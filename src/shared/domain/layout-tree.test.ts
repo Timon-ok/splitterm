@@ -4,6 +4,7 @@ import {
   leaf,
   splitLeaf,
   closeLeaf,
+  moveLeaf,
   collectLeaves,
   findLeaf,
   normalizeSession,
@@ -43,6 +44,75 @@ describe('layout-tree', () => {
     const s = root as SplitNode;
     expect(s.children).toHaveLength(2);
     expect(s.children[1]!.type).toBe('split'); // b became a col sub-split
+  });
+
+  describe('splitLeaf before=true (leading side)', () => {
+    it('puts the new leaf first when splitting a root leaf', () => {
+      const s = splitLeaf(L('a'), 'a', 'row', L('b'), true) as SplitNode;
+      expect(collectLeaves(s).map((n) => n.id)).toEqual(['b', 'a']);
+    });
+
+    it('splices before the target in a same-direction parent', () => {
+      let root = splitLeaf(L('a'), 'a', 'row', L('b'));
+      root = splitLeaf(root, 'b', 'row', L('c'), true); // insert c before b
+      expect(collectLeaves(root).map((n) => n.id)).toEqual(['a', 'c', 'b']);
+    });
+
+    it('nests with the new leaf leading in the cross direction', () => {
+      let root = splitLeaf(L('a'), 'a', 'row', L('b'));
+      root = splitLeaf(root, 'b', 'col', L('c'), true);
+      const sub = (root as SplitNode).children[1] as SplitNode;
+      expect(sub.type).toBe('split');
+      expect(collectLeaves(sub).map((n) => n.id)).toEqual(['c', 'b']); // c above b
+    });
+  });
+
+  describe('moveLeaf', () => {
+    // row[a,b,c]
+    const row3 = (): SplitNode => {
+      let root = splitLeaf(L('a', 1), 'a', 'row', L('b', 2));
+      root = splitLeaf(root, 'b', 'row', L('c', 3));
+      return root as SplitNode;
+    };
+
+    it('is a no-op (same reference) for source===target or a missing id', () => {
+      const root = row3();
+      expect(moveLeaf(root, 'a', 'a', 'row', false)).toBe(root);
+      expect(moveLeaf(root, 'zzz', 'a', 'row', false)).toBe(root);
+      expect(moveLeaf(root, 'a', 'zzz', 'row', false)).toBe(root);
+    });
+
+    it('moves a leaf to the trailing side of the target', () => {
+      const after = moveLeaf(row3(), 'a', 'c', 'row', false); // a after c
+      expect(after).not.toBe(row3());
+      expect(collectLeaves(after).map((n) => n.id)).toEqual(['b', 'c', 'a']);
+    });
+
+    it('moves a leaf to the leading side of the target', () => {
+      const after = moveLeaf(row3(), 'c', 'a', 'row', true); // c before a
+      expect(collectLeaves(after).map((n) => n.id)).toEqual(['c', 'a', 'b']);
+    });
+
+    it('re-tiles into the perpendicular direction (2-pane collapse case)', () => {
+      const row = splitLeaf(L('a', 1), 'a', 'row', L('b', 2)); // row[a,b]
+      const after = moveLeaf(row, 'a', 'b', 'col', false) as SplitNode; // a below b
+      expect(after.dir).toBe('col');
+      expect(collectLeaves(after).map((n) => n.id)).toEqual(['b', 'a']);
+    });
+
+    it('preserves the moved leaf identity (id + termId)', () => {
+      const after = moveLeaf(row3(), 'a', 'c', 'row', false);
+      const moved = findLeaf(after, 'a');
+      expect(moved?.termId).toBe(asTermId(1));
+    });
+
+    it('keeps exactly the same leaves and valid ratios', () => {
+      const after = moveLeaf(row3(), 'a', 'c', 'row', false);
+      expect(collectLeaves(after).map((n) => n.id).sort()).toEqual(['a', 'b', 'c']);
+      for (const n of collectLeaves(after)) void n; // all leaves intact
+      const sum = (after as SplitNode).ratios.reduce((x, y) => x + y, 0);
+      expect(Math.abs(sum - 1)).toBeLessThan(1e-9);
+    });
   });
 
   it('closes a leaf and collapses the single-child parent', () => {

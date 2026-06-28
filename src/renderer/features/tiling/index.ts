@@ -16,7 +16,9 @@ import {
   findLeaf,
   splitLeaf,
   closeLeaf,
+  moveLeaf,
 } from '@shared/domain/layout-tree';
+import { pickZone, zoneToSplit, type Zone } from './drop-zone';
 
 const GUTTER = 6; // px — transparent gap between cards; highlights on hover for resize
 const FOCUS_RING = 'pane-focused'; // styled in base.css (accent border on the focused card)
@@ -437,14 +439,27 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     relayout(bId); // focus follows the dragged terminal to its new home
   }
 
-  // Pointer-drag a pane via its grip handle: a ghost follows the cursor, the source pane dims,
-  // the hovered pane highlights, and dropping swaps them.
+  // Re-tile: move the dragged pane to an edge of the target (zone → direction + leading/trailing
+  // side). The pane keeps its live terminal — no respawn — so scrollback survives the move.
+  function moveLeafTo(sourceId: string, targetId: string, dir: Dir, before: boolean): void {
+    if (!root) return;
+    const next = moveLeaf(root, sourceId, targetId, dir, before);
+    if (next === root) return; // the move changed nothing
+    maximizedId = null;
+    root = next;
+    relayout(sourceId); // focus follows the pane the user just moved
+  }
+
+  // Pointer-drag a pane via its grip handle: a ghost follows the cursor, the source pane dims, and a
+  // zone overlay previews where it will land. Dropping on a pane's center swaps the two; dropping on
+  // an edge re-tiles the dragged pane to that side (Windows-Snap style).
   function startPaneDrag(sourceId: string, e: PointerEvent): void {
     e.preventDefault();
     e.stopPropagation();
     if (!root || collectLeaves(root).length < 2) return;
 
     let targetId: string | null = null;
+    let targetZone: Zone | null = null;
     const cellFor = (id: string): HTMLElement | null =>
       container.querySelector<HTMLElement>(`[data-leaf-id="${CSS.escape(id)}"]`);
 
@@ -468,28 +483,78 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     };
     moveGhost(e.clientX, e.clientY);
 
-    const setTarget = (id: string | null): void => {
-      const next = id && id !== sourceId ? id : null;
-      if (next === targetId) return;
+    // Floating overlay that fills the half (or whole, for a swap) of the target pane the drop will
+    // occupy. pointer-events:none so it never interferes with the hit-test under the cursor.
+    const zoneEl = document.createElement('div');
+    zoneEl.className = 'pane-drop-zone fixed left-0 top-0 z-[90] pointer-events-none';
+    zoneEl.style.display = 'none';
+    document.body.appendChild(zoneEl);
+    const positionZone = (cell: HTMLElement, zone: Zone): void => {
+      const r = cell.getBoundingClientRect();
+      let x = r.left;
+      let y = r.top;
+      let w = r.width;
+      let h = r.height;
+      if (zone === 'left') {
+        w = r.width / 2;
+      } else if (zone === 'right') {
+        x = r.left + r.width / 2;
+        w = r.width / 2;
+      } else if (zone === 'top') {
+        h = r.height / 2;
+      } else if (zone === 'bottom') {
+        y = r.top + r.height / 2;
+        h = r.height / 2;
+      }
+      // center → the whole rect (a swap)
+      zoneEl.style.transform = `translate(${x}px, ${y}px)`;
+      zoneEl.style.width = `${w}px`;
+      zoneEl.style.height = `${h}px`;
+      zoneEl.classList.toggle('is-swap', zone === 'center');
+      zoneEl.style.display = 'block';
+    };
+
+    const clearTarget = (): void => {
       if (targetId) cellFor(targetId)?.classList.remove('drop-target');
-      targetId = next;
-      if (targetId) cellFor(targetId)?.classList.add('drop-target');
+      targetId = null;
+      targetZone = null;
+      zoneEl.style.display = 'none';
+    };
+    const setTarget = (cell: HTMLElement | null, x: number, y: number): void => {
+      const id = cell?.dataset.leafId ?? null;
+      if (!cell || !id || id === sourceId) {
+        clearTarget();
+        return;
+      }
+      const r = cell.getBoundingClientRect();
+      const zone = pickZone((x - r.left) / r.width, (y - r.top) / r.height);
+      if (id === targetId && zone === targetZone) return; // unchanged — skip the DOM writes
+      if (targetId && targetId !== id) cellFor(targetId)?.classList.remove('drop-target');
+      targetId = id;
+      targetZone = zone;
+      cell.classList.add('drop-target');
+      positionZone(cell, zone);
     };
     const onMove = (ev: PointerEvent): void => {
       moveGhost(ev.clientX, ev.clientY);
       const under = document.elementFromPoint(ev.clientX, ev.clientY);
       const cell = under instanceof Element ? under.closest<HTMLElement>('[data-leaf-id]') : null;
-      setTarget(cell?.dataset.leafId ?? null);
+      setTarget(cell, ev.clientX, ev.clientY);
     };
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       document.body.classList.remove('pane-dragging');
       ghost.remove();
+      zoneEl.remove();
       sourceCell?.classList.remove('pane-source');
       const dest = targetId;
-      setTarget(null);
-      if (dest) swap(sourceId, dest);
+      const zone = targetZone;
+      if (dest) cellFor(dest)?.classList.remove('drop-target');
+      if (!dest || !zone) return;
+      const split = zoneToSplit(zone);
+      if (split) moveLeafTo(sourceId, dest, split.dir, split.before);
+      else swap(sourceId, dest); // center zone → swap
     };
     document.body.classList.add('pane-dragging');
     window.addEventListener('pointermove', onMove);
