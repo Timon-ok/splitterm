@@ -45,14 +45,16 @@ function normalize(ratios: number[]): number[] {
 }
 
 /**
- * Split `targetId` in direction `dir`, inserting `newLeaf` next to it. If the target's parent is
+ * Split `targetId` in direction `dir`, inserting `newLeaf` next to it. `before` puts the new leaf on
+ * the leading side (left/top) instead of the trailing side (right/bottom). If the target's parent is
  * already a split of the same direction, the new leaf is spliced in as a sibling (no extra
  * nesting); otherwise the leaf is replaced by a 2-child sub-split. Returns a new tree.
  */
-export function splitLeaf(node: LayoutNode, targetId: string, dir: Dir, newLeaf: LeafNode): LayoutNode {
+export function splitLeaf(node: LayoutNode, targetId: string, dir: Dir, newLeaf: LeafNode, before = false): LayoutNode {
   if (node.type === 'leaf') {
     if (node.id !== targetId) return node;
-    return { type: 'split', dir, children: [node, newLeaf], ratios: [0.5, 0.5] };
+    const children = before ? [newLeaf, node] : [node, newLeaf];
+    return { type: 'split', dir, children, ratios: [0.5, 0.5] };
   }
 
   const idx = node.children.findIndex((c) => c.type === 'leaf' && c.id === targetId);
@@ -60,17 +62,38 @@ export function splitLeaf(node: LayoutNode, targetId: string, dir: Dir, newLeaf:
     const target = node.children[idx]!;
     if (node.dir === dir) {
       const children = [...node.children];
-      children.splice(idx + 1, 0, newLeaf);
+      children.splice(before ? idx : idx + 1, 0, newLeaf);
       // Equalize siblings so panes stay gleichmäßig (no progressive shrinking).
       const ratios = new Array<number>(children.length).fill(1 / children.length);
       return { ...node, children, ratios };
     }
     const children = [...node.children];
-    children[idx] = { type: 'split', dir, children: [target, newLeaf], ratios: [0.5, 0.5] };
+    const sub = before ? [newLeaf, target] : [target, newLeaf];
+    children[idx] = { type: 'split', dir, children: sub, ratios: [0.5, 0.5] };
     return { ...node, children };
   }
 
-  return { ...node, children: node.children.map((c) => splitLeaf(c, targetId, dir, newLeaf)) };
+  return { ...node, children: node.children.map((c) => splitLeaf(c, targetId, dir, newLeaf, before)) };
+}
+
+/**
+ * Re-position the leaf `sourceId` so it sits adjacent to `targetId` along `dir`, on the leading side
+ * (`before` = left/top) or trailing side (right/bottom). The source keeps its identity (id + termId);
+ * it is detached from its current spot (collapsing any split it leaves with one child) and re-inserted
+ * next to the target. Returns a NEW tree on success, or the SAME `node` reference for a no-op (source
+ * === target, or either id is missing) so callers can cheaply detect "nothing changed".
+ */
+export function moveLeaf(node: LayoutNode, sourceId: string, targetId: string, dir: Dir, before: boolean): LayoutNode {
+  if (sourceId === targetId) return node;
+  const source = findLeaf(node, sourceId);
+  if (!source || !findLeaf(node, targetId)) return node;
+
+  // Detaching the source can never empty the tree here — the target leaf still remains — so the
+  // closeLeaf result is non-null. The target keeps its id, so splitLeaf still finds it afterward.
+  const detached = closeLeaf(node, sourceId);
+  if (!detached) return node;
+  const moved: LeafNode = { type: 'leaf', id: source.id, termId: source.termId };
+  return splitLeaf(detached, targetId, dir, moved, before);
 }
 
 /**
