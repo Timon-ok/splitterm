@@ -63,7 +63,7 @@ try {
   const shellSel = win.locator('.settings-dialog form select'); // add-form shell select
   const optionValues = await shellSel.locator('option').evaluateAll((os2) => os2.map((o) => o.value));
   if (optionValues[0]) await shellSel.selectOption(optionValues[0]);
-  await win.locator('.settings-dialog input[placeholder^="Startup"]').fill(`echo ${MARKER}`);
+  await win.locator('.settings-dialog textarea[aria-label="Startup commands"]').fill(`echo ${MARKER}`);
   await win.getByRole('button', { name: 'Add profile' }).click();
   await sleep(400);
   await win.keyboard.press('Escape'); // close modal

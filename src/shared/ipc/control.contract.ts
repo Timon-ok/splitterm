@@ -11,6 +11,8 @@ export interface SpawnRequest {
   rows: number;
   /** inject OSC 7 cwd reporting into PowerShell (so cwd-on-split works on a stock prompt) */
   shellIntegration?: boolean;
+  /** this pane is being reopened by session restore — run the profile's restore sequence, not startup */
+  restore?: boolean;
 }
 export interface SpawnResponse {
   id: TermId;

@@ -103,6 +103,25 @@ export function textControl(opts: {
   return el;
 }
 
+/** A multi-line text field (one value per line). Used for profile command sequences. */
+export function textareaControl(opts: {
+  value: string;
+  placeholder?: string;
+  rows?: number;
+  onChange: (value: string) => void;
+}): HTMLTextAreaElement {
+  const el = document.createElement('textarea');
+  el.className =
+    'px-2 py-1.5 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--bg-input)] text-[12px] ' +
+    'text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] outline-none focus:border-[var(--accent)] ' +
+    'resize-y leading-snug font-mono';
+  el.rows = opts.rows ?? 2;
+  el.value = opts.value;
+  if (opts.placeholder) el.placeholder = opts.placeholder;
+  el.addEventListener('change', () => opts.onChange(el.value));
+  return el;
+}
+
 /** An iOS-style switch. Mirrors `aria-checked` so the e2e (and a11y tools) can read its state. */
 export function toggle(opts: { checked: boolean; onChange: (value: boolean) => void }): HTMLButtonElement {
   const btn = document.createElement('button');

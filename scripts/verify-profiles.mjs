@@ -53,7 +53,7 @@ try {
   const optionValues = await shellSel.locator('option').evaluateAll((os2) => os2.map((o) => o.value));
   result.shellOptions = optionValues;
   if (optionValues[0]) await shellSel.selectOption(optionValues[0]);
-  await win.locator('.settings-dialog input[placeholder^="Startup"]').fill('echo splitterm-marker');
+  await win.locator('.settings-dialog textarea[aria-label="Startup commands"]').fill('echo splitterm-marker');
   await win.getByRole('button', { name: 'Add profile' }).click();
   await sleep(500);
   result.profileListedInModal = (await win.locator('.settings-dialog').getByText('Claude', { exact: true }).count()) > 0;

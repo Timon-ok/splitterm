@@ -34,7 +34,7 @@ let defaultProfileId = ''; // the profile the "+" button opens (no explicit prof
 const pendingSpawns: Array<{ id: TermId; opts: SpawnRequest; launch: ResolvedLaunch }> = [];
 
 function launch(id: TermId, opts: SpawnRequest, l: ResolvedLaunch): void {
-  spawnPty(id, opts, { file: l.file, args: l.args }, l.startupCommand);
+  spawnPty(id, opts, { file: l.file, args: l.args }, l.startupCommands);
 }
 
 function onPortMessage(e: { data: unknown }): void {
@@ -69,7 +69,7 @@ parentPort?.on('message', (e) => {
       break;
     }
     case 'spawn': {
-      const l = resolveLaunch(msg.opts.profileId, fullProfiles, userProfiles, defaultProfileId, resolveShell);
+      const l = resolveLaunch(msg.opts.profileId, fullProfiles, userProfiles, defaultProfileId, resolveShell, msg.opts.restore);
       if (hasFirehose()) launch(msg.id, msg.opts, l);
       else pendingSpawns.push({ id: msg.id, opts: msg.opts, launch: l });
       break;

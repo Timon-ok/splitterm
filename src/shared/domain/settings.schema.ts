@@ -54,7 +54,25 @@ const FONT_SIZE_MAX = 72;
 const SCROLLBACK_MIN = 0;
 const SCROLLBACK_MAX = 1_000_000;
 const STARTUP_COMMAND_MAX = 2000;
+const MAX_COMMANDS = 20; // cap a profile's startup/restore sequence so a crafted config can't queue thousands
 const CURSOR_STYLES = ['block', 'bar', 'underline'] as const;
+
+// One profile command: keep only the first line (an embedded newline would inject an extra command
+// into the pty) and bound its length. Returns '' for anything unusable.
+const oneCommand = (v: string): string => (v.split(/[\r\n]/, 1)[0] ?? '').slice(0, STARTUP_COMMAND_MAX);
+
+// Coerce an untrusted value into a bounded list of single-line commands, or undefined when empty.
+// SECURITY: each command is written to the pty verbatim (`pty.write(`${cmd}\r`)`), so every element is
+// forced single-line; the array length is capped.
+function commandList(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v
+    .filter((x): x is string => typeof x === 'string')
+    .map(oneCommand)
+    .filter((s) => s.length > 0)
+    .slice(0, MAX_COMMANDS);
+  return out.length > 0 ? out : undefined;
+}
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -85,13 +103,11 @@ function normalizeProfile(v: unknown): UserProfile | null {
     name: typeof v.name === 'string' ? v.name : '',
     baseShellId,
   };
-  if (typeof v.startupCommand === 'string') {
-    // SECURITY: the host runs this verbatim (`pty.write(`${cmd}\r`)`), so it MUST be a single line —
-    // an embedded newline would inject a second command. Keep only the first line, bounded length.
-    const firstLine = v.startupCommand.split(/[\r\n]/, 1)[0] ?? '';
-    const cmd = firstLine.slice(0, STARTUP_COMMAND_MAX);
-    if (cmd) profile.startupCommand = cmd;
-  }
+  // Startup sequence: the new `startupCommands` array, or a legacy single `startupCommand` folded in.
+  const startupCommands = commandList(v.startupCommands) ?? (typeof v.startupCommand === 'string' ? commandList([v.startupCommand]) : undefined);
+  if (startupCommands) profile.startupCommands = startupCommands;
+  const restoreCommands = commandList(v.restoreCommands);
+  if (restoreCommands) profile.restoreCommands = restoreCommands;
   return profile;
 }
 
