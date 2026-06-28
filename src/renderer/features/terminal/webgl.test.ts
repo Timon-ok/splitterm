@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Drive the real WebglAddon out of the picture: a controllable stub lets us simulate WebGL being
-// unavailable (constructor throws), a context that fails to initialize (loadAddon throws), and a
+// Drive the real WebglAddon out of the picture: a controllable stub lets us simulate the legacy-Safari
+// constructor throw, the real Electron/Chromium failure path where the GL context fails to initialize
+// inside loadAddon() (this is how an unavailable/blocklisted WebGL2 actually surfaces here), and a
 // context lost at runtime (invoke the registered onContextLoss). vi.hoisted keeps the shared state
 // reachable from the hoisted vi.mock factory.
 const h = vi.hoisted(() => {
@@ -55,14 +56,16 @@ describe('tryAttachWebgl', () => {
     expect(h.state.instances[0]!.disposed).toBe(true);
   });
 
-  it('falls back (returns null) when WebGL is unavailable, without consuming budget', async () => {
+  it('falls back (returns null) when the addon constructor throws (legacy-Safari path)', async () => {
     const { tryAttachWebgl, activeWebglContexts } = await freshModule();
     h.state.constructThrows = true;
     expect(tryAttachWebgl(makeTerm() as never)).toBeNull();
     expect(activeWebglContexts()).toBe(0);
   });
 
-  it('falls back and rolls back the budget when GL init throws', async () => {
+  // The path users actually hit when WebGL2 is unavailable/blocklisted on Electron/Chromium: the
+  // throw comes from loadAddon() (activate()), not the constructor. The budget increment must roll back.
+  it('falls back and rolls back the budget when the GL context fails to initialize', async () => {
     const { tryAttachWebgl, activeWebglContexts } = await freshModule();
     expect(tryAttachWebgl(makeTerm(true) as never)).toBeNull();
     expect(activeWebglContexts()).toBe(0); // the increment was undone

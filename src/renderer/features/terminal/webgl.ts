@@ -5,16 +5,21 @@
 // caps live contexts at ~16, then silently kills the OLDEST one). A tiling terminal can open more
 // panes than that, so we must NOT hand every pane its own context blindly.
 //
-// This module is the single chokepoint. It (1) caps how many panes get a live context, and (2)
-// guarantees that any failure — WebGL unavailable, blocklisted GPU, init throw, or a context lost
-// at runtime — degrades the pane to the DOM renderer. The worst case is exactly today's behavior,
-// never a blank or frozen pane.
+// This module is the single chokepoint. It (1) caps how many panes get a live context (best-effort —
+// see the partial-init note on MAX_WEBGL_CONTEXTS), and (2) guarantees that any failure — WebGL
+// unavailable, blocklisted GPU, init throw, or a context lost at runtime — degrades the pane to the
+// DOM renderer. A pane never ends up permanently blank. The one caveat: on a *runtime* context loss
+// xterm waits up to ~3s for the GPU to restore the context before firing onContextLoss (our fallback
+// hook), so that pane shows a stale frame for that window rather than reverting to DOM instantly.
 import { WebglAddon } from '@xterm/addon-webgl';
 import type { Terminal } from '@xterm/xterm';
 
 // Conservative headroom under Chrome's ~16-context limit, leaving room for other GPU surfaces in the
 // app and for a respawn before the browser starts evicting. Panes beyond this stay on the DOM
-// renderer (correct, just not GPU-accelerated).
+// renderer (correct, just not GPU-accelerated). The count is best-effort: a GPU that fails shader
+// init *after* acquiring its context (see the loadAddon catch) orphans that context outside our
+// accounting until GC, so we keep the cap well under the hard limit to absorb the occasional orphan
+// without the browser evicting a live pane.
 const MAX_WEBGL_CONTEXTS = 8;
 
 let active = 0;
@@ -44,7 +49,9 @@ export function tryAttachWebgl(term: Terminal): WebglHandle | null {
   try {
     addon = new WebglAddon();
   } catch {
-    return null; // constructor probes WebGL2 and throws when it's unavailable
+    // The addon constructor only throws on legacy Safari (<16). On Electron/Chromium a missing or
+    // blocklisted WebGL2 instead surfaces from loadAddon() below — both paths return null here.
+    return null;
   }
 
   let disposed = false;
@@ -67,7 +74,10 @@ export function tryAttachWebgl(term: Terminal): WebglHandle | null {
   addon.onContextLoss(release);
 
   try {
-    term.loadAddon(addon); // activate() initializes the GL context and can throw
+    // activate() acquires the GL context and compiles shaders; this is where a missing/blocklisted
+    // WebGL2 or a shader-init failure surfaces on Electron/Chromium. A failure *after* the context is
+    // acquired can orphan it until GC — see the best-effort note on MAX_WEBGL_CONTEXTS.
+    term.loadAddon(addon);
   } catch {
     release();
     return null;

@@ -46,8 +46,9 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
   term.open(el);
 
   // GPU renderer (opt-in). Must load AFTER open() — it needs the live canvas. Returns null and stays
-  // on the DOM renderer when WebGL is off, unavailable, or the context budget is full; self-disposes
-  // on context loss. Tracked so the pane releases its context on close.
+  // on the DOM renderer when WebGL is off, unavailable, or the context budget is full; on a runtime
+  // context loss it self-disposes (after xterm's ~3s GPU-restore wait) and the pane reverts to DOM.
+  // Tracked so the pane releases its context on close.
   const webgl = s.terminal.webgl ? tryAttachWebgl(term) : null;
 
   // Track the cwd the shell reports via OSC 7 (`ESC ]7;file://host/path BEL`).
