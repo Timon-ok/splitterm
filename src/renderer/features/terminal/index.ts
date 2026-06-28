@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import type { TermId } from '@shared/ids';
 import { ipc } from '@platform/ipc-client';
 import { registerTerminal, unregisterTerminal, writeToPty, resizePty, ackPty, whenPortReady } from '@platform/pty-port';
-import { registerPane, deletePane } from '@platform/pane-registry';
+import { registerPane, deletePane, notifyPaneTitleChange } from '@platform/pane-registry';
 import { getSettings } from '@platform/settings-controller';
 import { readTerminalTheme } from './theme';
 import { createTerminalSearch } from './search';
@@ -137,6 +137,17 @@ export async function createTerminal(
   );
   term.onData((d) => writeToPty(id, d));
 
+  // Live pane title: track what the shell reports via OSC 0/2 (the running program, cwd, etc.). The
+  // display title is this when set, else the profile name; notify the tiling so the chip + sidebar
+  // refresh. Bounded so a hostile/huge title can't bloat the chip.
+  let oscTitle = '';
+  const titleEvt = term.onTitleChange((t) => {
+    const next = t.trim().slice(0, 256);
+    if (next === oscTitle) return;
+    oscTitle = next;
+    notifyPaneTitleChange(id);
+  });
+
   // rAF-coalesce fits so a gutter drag (many size observations/sec) refits at most once per frame
   // instead of thrashing the expensive FitAddon.fit() + a PTY resize on every observation.
   let fitScheduled = false;
@@ -166,7 +177,10 @@ export async function createTerminal(
 
   registerPane(id, {
     el,
-    title,
+    title, // persistent profile title (for restore)
+    // An explicit profile name wins (the user chose it); the shell's live OSC title fills in for an
+    // UNNAMED ("+") pane — so a default terminal shows what's running / its cwd.
+    displayTitle: () => title || oscTitle,
     profileId,
     focus: () => term.focus(),
     fit: refit,
@@ -207,6 +221,7 @@ export async function createTerminal(
     dispose: () => {
       observer.disconnect();
       osc7.dispose();
+      titleEvt.dispose();
       search.dispose();
       clip.dispose();
       webgl?.dispose(); // free the GPU context before the terminal so it returns to the budget

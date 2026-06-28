@@ -3,8 +3,9 @@
 // `fr` ratios live; per-pane ResizeObserver refits. See architecture.md §5, project-structure.md §7.
 import { X, GripVertical, Terminal as TerminalIcon } from 'lucide';
 import { createTerminal } from '@features/terminal';
-import { getPane } from '@platform/pane-registry';
+import { getPane, onPaneTitleChange } from '@platform/pane-registry';
 import { getSettings } from '@platform/settings-controller';
+import type { TermId } from '@shared/ids';
 import { icon } from '../../chrome/icons';
 import {
   type LayoutNode,
@@ -69,7 +70,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     for (const id of order) {
       const lf = findLeaf(root, id);
       if (!lf) continue;
-      out.push({ leafId: id, termId: lf.termId, title: getPane(lf.termId)?.title ?? '', focused: id === focusedLeafId });
+      out.push({ leafId: id, termId: lf.termId, title: getPane(lf.termId)?.displayTitle() ?? '', focused: id === focusedLeafId });
     }
     return out;
   }
@@ -182,7 +183,8 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     if (node.id === focusedLeafId) cell.classList.add(FOCUS_RING);
     const pane = getPane(node.termId);
     if (pane) cell.appendChild(pane.el);
-    if (pane?.title) cell.appendChild(makeTitleChip(pane.title));
+    const dt = pane?.displayTitle() ?? '';
+    if (dt) cell.appendChild(makeTitleChip(dt));
     cell.addEventListener(
       'mousedown',
       () => focusLeaf(node.id),
@@ -753,9 +755,26 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     if (focusedLeafId) focusLeaf(focusedLeafId);
   }
 
+  // Update a pane's title chip in place when its shell changes the title (OSC 0/2) — no relayout.
+  // Find the mounted cell by term id, then create / update / remove the chip to match displayTitle().
+  function updateTitleChip(termId: TermId): void {
+    const cell = container.querySelector<HTMLElement>(`[data-term-id="${CSS.escape(String(termId))}"]`);
+    if (!cell) return; // not currently mounted (e.g. a background pane while another is maximized)
+    const dt = getPane(termId)?.displayTitle() ?? '';
+    const existing = cell.querySelector('.pane-title');
+    if (!dt) existing?.remove();
+    else if (existing) existing.textContent = dt;
+    else cell.appendChild(makeTitleChip(dt));
+  }
+
   // ---- lifecycle ----------------------------------------------------------
 
   window.addEventListener('keydown', onKeydown, { capture: true });
+  // Refresh the chip + Sessions sidebar live when a pane's shell reports a new title.
+  const unsubscribeTitles = onPaneTitleChange((id) => {
+    updateTitleChip(id);
+    emit();
+  });
   render(); // start empty — the first terminal opens on the first "+" (or Alt+Shift+= / -)
 
   return {
@@ -779,6 +798,7 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
     restore,
     dispose() {
       window.removeEventListener('keydown', onKeydown, { capture: true });
+      unsubscribeTitles();
       if (root) for (const lf of collectLeaves(root)) getPane(lf.termId)?.dispose();
       container.replaceChildren();
     },
