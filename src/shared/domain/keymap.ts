@@ -43,6 +43,13 @@ export const ACTION_LABELS: Record<ActionId, string> = {
 
 const MODIFIERS = ['Ctrl', 'Alt', 'Shift', 'Meta'] as const;
 const MODIFIER_SET = new Set<string>(MODIFIERS);
+// Recognized KeyboardEvent.code values for the key part of a chord. Guards against a typo'd code
+// (e.g. "W" instead of "KeyW") that would canonicalize cleanly yet never match a real event.
+const VALID_CODE =
+  /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2])|Arrow(Left|Right|Up|Down)|Enter|Space|Tab|Backspace|Escape|Delete|Insert|Home|End|PageUp|PageDown|Equal|Minus|Comma|Period|Slash|Backslash|BracketLeft|BracketRight|Semicolon|Quote|Backquote|Numpad([0-9]|Add|Subtract|Multiply|Divide|Decimal|Enter))$/;
+// Keys that may be bound WITHOUT a modifier; everything else needs one, so a binding can't shadow
+// ordinary typing (e.g. a bare "a" splitting panes).
+const BARE_OK = /^F([1-9]|1[0-2])$/;
 // Bare modifier key codes — a chord can't be just a modifier.
 const MODIFIER_CODES = new Set([
   'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight',
@@ -81,12 +88,13 @@ export function normalizeChord(s: unknown): string | null {
   if (parts.length === 0) return null;
   const code = parts[parts.length - 1]!;
   const mods = parts.slice(0, -1);
-  if (MODIFIER_SET.has(code)) return null; // the last part must be a key code, not a modifier
+  if (!VALID_CODE.test(code)) return null; // the last part must be a recognized key code
   const seen = new Set<string>();
   for (const m of mods) {
     if (!MODIFIER_SET.has(m) || seen.has(m)) return null; // unknown or duplicate modifier
     seen.add(m);
   }
+  if (seen.size === 0 && !BARE_OK.test(code)) return null; // ordinary keys need at least one modifier
   const out: string[] = [];
   for (const m of MODIFIERS) if (seen.has(m)) out.push(m);
   out.push(code);

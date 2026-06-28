@@ -642,6 +642,11 @@ export async function createTiling(container: HTMLElement): Promise<Tiling> {
   // never reaches xterm/the PTY; everything unbound passes straight through.
   function onKeydown(e: KeyboardEvent): void {
     if (e.repeat || dragging) return; // ignore auto-repeat and keys during a gutter drag
+    // Ignore keys while the settings modal owns focus (this is a window capture-phase listener, so it
+    // would otherwise fire BEFORE the Keyboard section's chord-capture button and run the bound action
+    // — e.g. close a pane — behind the modal, while also stealing the keypress from the rebind UI).
+    const t = e.target;
+    if (t instanceof Element && t.closest('.settings-overlay')) return;
     const chord = chordFromEvent(e);
     if (!chord) return;
     const action = matchAction(chord, getSettings().keybindings);

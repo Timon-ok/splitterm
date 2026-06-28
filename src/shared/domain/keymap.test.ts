@@ -34,7 +34,7 @@ describe('normalizeChord', () => {
   });
   it('accepts a valid chord unchanged', () => {
     expect(normalizeChord('Ctrl+Shift+KeyW')).toBe('Ctrl+Shift+KeyW');
-    expect(normalizeChord('ArrowLeft')).toBe('ArrowLeft');
+    expect(normalizeChord('Alt+ArrowLeft')).toBe('Alt+ArrowLeft');
   });
   it('rejects malformed chords', () => {
     expect(normalizeChord('Ctrl+Shift')).toBeNull(); // no key code
@@ -42,6 +42,18 @@ describe('normalizeChord', () => {
     expect(normalizeChord('Ctrl+Ctrl+KeyA')).toBeNull(); // duplicate modifier
     expect(normalizeChord('')).toBeNull();
     expect(normalizeChord(42)).toBeNull();
+  });
+  it('rejects an unrecognized key code (typo like "W" instead of "KeyW")', () => {
+    expect(normalizeChord('Ctrl+W')).toBeNull();
+    expect(normalizeChord('Ctrl+keyW')).toBeNull();
+    expect(normalizeChord('Alt+Left')).toBeNull(); // real code is ArrowLeft
+  });
+  it('requires a modifier for ordinary keys, but allows bare function keys', () => {
+    expect(normalizeChord('KeyA')).toBeNull(); // would shadow typing "a"
+    expect(normalizeChord('ArrowLeft')).toBeNull();
+    expect(normalizeChord('Enter')).toBeNull();
+    expect(normalizeChord('F5')).toBe('F5');
+    expect(normalizeChord('Ctrl+KeyA')).toBe('Ctrl+KeyA');
   });
 });
 

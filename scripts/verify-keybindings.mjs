@@ -33,14 +33,30 @@ try {
   }
   if (!win) { result.error = 'no window'; await finish(1); }
 
-  // ---- Rebind "Split right" → Ctrl+Shift+D in Settings → Keyboard ----
+  // Open a terminal FIRST, so there's a pane that must NOT be closed during chord capture.
+  await win.getByRole('button', { name: 'New terminal' }).click();
+  await sleep(1000);
+  result.panesBefore = await panes(); // 1
+
+  // ---- Settings → Keyboard ----
   await win.getByRole('button', { name: 'Open settings' }).click();
   await sleep(300);
   await win.locator('.settings-dialog button[data-category="keyboard"]').click();
   await sleep(300);
   const splitBtn = win.locator('.settings-dialog button[aria-label="Split right shortcut"]');
   result.defaultLabel = (await splitBtn.textContent())?.trim();
-  await splitBtn.click(); // enter capture mode
+
+  // CRITICAL (review HIGH): capturing a chord already bound to a tiling action (Close pane =
+  // Ctrl+Shift+W) must NOT fire that action behind the modal, and must be rejected as a conflict.
+  await splitBtn.click();
+  await sleep(150);
+  await win.keyboard.press('Control+Shift+KeyW');
+  await sleep(250);
+  result.panesDuringConflict = await panes(); // must still be 1 — pane NOT closed behind the modal
+  result.splitRightAfterConflict = (await splitBtn.textContent())?.trim(); // unchanged (not reassigned)
+
+  // Now rebind to a free chord (Ctrl+Shift+D).
+  await splitBtn.click();
   await sleep(150);
   await win.keyboard.press('Control+Shift+KeyD');
   await sleep(200);
@@ -49,13 +65,9 @@ try {
   await win.keyboard.press('Escape'); // close settings
   await sleep(300);
 
-  // ---- Open a terminal and exercise the new vs old chord ----
-  await win.getByRole('button', { name: 'New terminal' }).click();
-  await sleep(1000);
+  // ---- Exercise the new vs old chord on the live terminal ----
   await win.locator('.xterm-screen').first().click();
   await sleep(150);
-  result.panesBefore = await panes();
-
   await win.keyboard.press('Control+Shift+KeyD'); // the NEW split-right chord
   await sleep(1000);
   result.panesAfterNewChord = await panes();
@@ -65,9 +77,11 @@ try {
   result.panesAfterOldChord = await panes();
 
   const ok =
+    result.panesBefore === 1 &&
+    result.panesDuringConflict === 1 && // HIGH-bug fix: no destructive action behind the modal
+    result.splitRightAfterConflict === 'Alt+Shift+=' && // conflict rejected (not reassigned)
     result.persisted === 'Ctrl+Shift+KeyD' &&
     result.newLabel === 'Ctrl+Shift+D' &&
-    result.panesBefore === 1 &&
     result.panesAfterNewChord === 2 &&
     result.panesAfterOldChord === 2; // old chord no longer splits
   result.ok = ok;

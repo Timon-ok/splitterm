@@ -9,6 +9,7 @@ import {
   DEFAULT_KEYBINDINGS,
   formatChord,
   chordFromEvent,
+  normalizeChord,
   matchAction,
   type ActionId,
 } from '@shared/domain/keymap';
@@ -49,8 +50,15 @@ export function createKeyboardSection(initial: Settings): HTMLElement {
       if (!capturing) return;
       e.preventDefault();
       e.stopPropagation(); // beat the dialog Tab-trap; window-capture Esc already handled before here
-      const chord = chordFromEvent(e);
-      if (!chord) return; // bare modifier — keep waiting for the full chord
+      const raw = chordFromEvent(e);
+      if (!raw) return; // bare modifier — keep waiting for the full chord
+      const chord = normalizeChord(raw);
+      if (!chord) {
+        // a bare ordinary key (or unsupported code) — needs a modifier; stay in capture mode
+        warn.textContent = 'Needs a modifier';
+        warn.classList.remove('hidden');
+        return;
+      }
       const existing = matchAction(chord, local);
       if (existing && existing !== action) {
         warn.textContent = `In use: ${ACTION_LABELS[existing]}`;
@@ -64,6 +72,7 @@ export function createKeyboardSection(initial: Settings): HTMLElement {
       paint();
     });
     btn.addEventListener('blur', () => {
+      warn.classList.add('hidden'); // clear any conflict / needs-modifier note when leaving
       if (!capturing) return;
       capturing = false; // clicked / focused away → cancel
       paint();
