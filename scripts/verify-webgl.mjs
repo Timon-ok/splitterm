@@ -2,11 +2,15 @@
 // (opt-in) and persists when enabled; (2) with it on, a new terminal and a split both render on the
 // GPU — detected by a <canvas> in .xterm-screen, which the DOM renderer never produces (it uses
 // .xterm-rows and zero canvases); (3) a live font change (texture-atlas rebuild + applySettings)
-// doesn't blank or crash the GPU panes; (4) no renderer errors fire throughout.
+// doesn't blank or crash the GPU panes; (4) no WebGL/renderer error fires throughout.
 //
 // The canvas assertions are gated on WebGL2 actually being available in the test environment — on a
 // GPU-less box the addon falls back to the DOM renderer, which is the whole safety guarantee, so the
 // test then verifies the panes still exist and nothing crashed rather than demanding a canvas.
+//
+// The error gate only fails on WebGL/renderer-relevant messages. Electron/Chromium emits unrelated
+// console/page noise on CI runners (e.g. the CDP "Autofill.enable wasn't found" probe, stray network
+// JSON-parse pageerrors) that has nothing to do with the GPU renderer and must not gate this test.
 import { _electron as electron } from 'playwright-core';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -24,6 +28,10 @@ const app = await electron.launch({ executablePath: electronPath, args: [mainJs,
 
 const result = { errors: [] };
 let win = null;
+
+// Messages that actually implicate the GPU renderer. A real WebGL failure surfaces as one of these
+// (addon throw, lost context, shader/texture/atlas error); everything else is environment noise.
+const WEBGL_ERROR_RE = /webgl|context\s*lost|contextlost|shader|texture|atlas|addon-webgl|xterm/i;
 
 async function finish(code) {
   console.log('RESULT ' + JSON.stringify(result, null, 2));
@@ -120,9 +128,11 @@ try {
 
   result.panesOk = panesOk;
   result.gpuOk = gpuOk;
-  result.noErrors = result.errors.length === 0;
+  // Gate only on WebGL/renderer errors; keep all captured messages in result.errors for diagnostics.
+  result.webglErrors = result.errors.filter((e) => WEBGL_ERROR_RE.test(e));
+  result.noWebglErrors = result.webglErrors.length === 0;
 
-  await finish(result.defaultOff && result.persistedOn && panesOk && gpuOk && result.noErrors ? 0 : 1);
+  await finish(result.defaultOff && result.persistedOn && panesOk && gpuOk && result.noWebglErrors ? 0 : 1);
 } catch (err) {
   result.error = String(err && err.message ? err.message : err);
   if (win) await win.screenshot({ path: path.resolve('scripts/verify-webgl-fail.png') }).catch(() => {});
