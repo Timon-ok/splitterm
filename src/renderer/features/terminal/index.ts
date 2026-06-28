@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
 import type { TermId } from '@shared/ids';
 import { ipc } from '@platform/ipc-client';
@@ -23,7 +24,17 @@ export interface TerminalInstance {
  * The element starts detached; the tiling engine appends it to a cell, at which point the
  * ResizeObserver fits it to the real size. M2 uses the DOM renderer; WebGL pooling lands in M2b.
  */
-export async function createTerminal(profileId?: string, title = '', initialCwd?: string, restore = false): Promise<TerminalInstance> {
+// How many scrollback rows to capture per pane for session-restore history — bounds session.json
+// (the trust boundary also caps the stored string).
+const SERIALIZE_SCROLLBACK = 1000;
+
+export async function createTerminal(
+  profileId?: string,
+  title = '',
+  initialCwd?: string,
+  restore = false,
+  replay?: string,
+): Promise<TerminalInstance> {
   const el = document.createElement('div');
   el.className = 'term-pane';
 
@@ -43,6 +54,16 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const serializeAddon = new SerializeAddon();
+  term.loadAddon(serializeAddon);
+
+  // Replay saved scrollback (session restore) as read-only history. Written BEFORE open() per the
+  // addon-serialize guidance (avoids rendering incomplete frames), followed by a dim separator so the
+  // restored history reads apart from the fresh shell that spawns below it.
+  if (replay) {
+    term.write(replay);
+    term.write('\r\n\x1b[2m╶─── restored ───╴\x1b[0m\r\n');
+  }
   term.open(el);
 
   // GPU renderer (opt-in). Must load AFTER open() — it needs the live canvas. Returns null and stays
@@ -146,6 +167,14 @@ export async function createTerminal(profileId?: string, title = '', initialCwd?
       term.options.theme = readTerminalTheme(); // re-read CSS vars (theme may have changed)
       search.reapply(); // recolor live search highlights if the bar is open
       refit();
+    },
+    // Capture the buffer (bounded) for session-restore history. Total — never throws into the caller.
+    serialize: () => {
+      try {
+        return serializeAddon.serialize({ scrollback: SERIALIZE_SCROLLBACK });
+      } catch {
+        return '';
+      }
     },
     dispose: () => {
       observer.disconnect();
