@@ -33,6 +33,17 @@ const SERIALIZE_SCROLLBACK = 1000;
 // How long a pane's output must be quiet before it drops from 'working' to 'idle' (or 'attention').
 const ACTIVE_IDLE_MS = 1200;
 
+// Claude-Code working detection (see the status block below).
+const FOOTER_SCAN_ROWS = 8; // bottom rows of the viewport that hold Claude's status footer + input box
+const ECHO_WINDOW_MS = 250; // output within this of a keystroke is treated as echo, not 'working'
+const GRACE_MS = 800; // affordance must be gone this long before leaving 'claudeWorking' (debounce a half-frame)
+const STALE_MS = 8000; // a present-but-unchanging affordance for this long is stale (a cat'd file / dead Claude)
+// Claude renders an "esc to interrupt" affordance while processing; punctuation varies by version, so
+// match the bare, whitespace-tolerant phrase (anchored to the footer region + liveness, not punctuation).
+const CLAUDE_WORKING_RE = /esc\s+to\s+interrupt/i;
+// A profile whose startup/restore sequence runs `claude` marks the pane as a Claude pane up-front.
+const CLAUDE_CMD_RE = /(^|\s|\/|\\)claude(\s|$|\.|-)/i;
+
 export async function createTerminal(
   profileId?: string,
   title = '',
@@ -136,85 +147,113 @@ export async function createTerminal(
   }
 
   // Live activity status (shown in the Sessions sidebar). Mostly firehose-derived: streaming output ⇒
-  // 'working'; quiet ⇒ 'idle' (or 'attention' if the shell rang the bell since); exit ⇒ 'exited'. ON
-  // TOP, we surface Claude Code specifically: while it processes a turn it shows an "esc to interrupt"
-  // hint on screen, so when that's present the pane is 'claudeWorking' (rendered in Claude's colour) —
-  // distinct from generic activity, so your own typing isn't mistaken for Claude working.
+  // 'working'; quiet ⇒ 'idle' (or 'attention' if the shell rang the bell); exit ⇒ 'exited'. ON TOP we
+  // surface Claude Code specifically: while it processes a turn it draws an "esc to interrupt" affordance
+  // on its bottom status line, so the pane reads 'claudeWorking' (Claude's colour). A pane launched with
+  // a `claude` profile — or whose title/affordance says so — is LATCHED as a Claude pane, and a Claude
+  // pane never shows generic 'working', so composing a message never looks like progress.
   let status: PaneStatus = 'idle';
   let belled = false;
   let claudeWorking = false;
+  let isClaudePane = false; // latched true once we know the pane is running Claude (profile / title / affordance)
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let scanTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastInputAt = 0; // performance.now() of the last genuine keystroke — used to ignore typing echo
+  let footerSig = ''; // the last scanned footer text + when it last changed — to detect a frozen (stale) affordance
+  let footerSigAt = 0;
+  let lastAffordanceAt = 0; // last time the affordance was seen — debounces a turn-end half-frame
+  let affordanceStreak = 0; // consecutive scans seeing the affordance — 2 latches a no-profile Claude pane
   // Count of term.write() calls still being parsed. xterm fires onData both for genuine user input AND
-  // for its automatic replies to host queries (cursor-position/device-attributes/colour) — but those
-  // replies are generated WHILE PARSING program output, i.e. inside an in-flight write. So onData with
-  // parsingOutput > 0 is a synthetic reply, not a keystroke; broadcast excludes it. (Also: a background
-  // pane only ever fires onData from parsing, so it can never originate a broadcast.)
+  // for its automatic replies to host queries (cursor-position/device-attributes/colour) — generated
+  // WHILE PARSING program output (an in-flight write). So onData with parsingOutput > 0 is a synthetic
+  // reply, not a keystroke; the broadcast fan-out + the echo gate both rely on this.
   let parsingOutput = 0;
-  const setStatus = (s: PaneStatus): void => {
-    if (s === status) return;
-    status = s;
+
+  // Latch up-front from the launch profile, so even the FIRST message (before any affordance) reads right.
+  const claudeProfile = profileId ? s.profiles.find((p) => p.id === profileId) : undefined;
+  if (claudeProfile && CLAUDE_CMD_RE.test([...(claudeProfile.startupCommands ?? []), ...(claudeProfile.restoreCommands ?? [])].join('\n'))) {
+    isClaudePane = true;
+  }
+
+  const setStatus = (next: PaneStatus): void => {
+    if (next === status) return;
+    status = next;
     notifyPaneStatusChange(id);
   };
   const armIdle = (): void => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => setStatus(belled ? 'attention' : 'idle'), ACTIVE_IDLE_MS);
   };
+  const enterClaudeWorking = (): void => {
+    claudeWorking = true;
+    setStatus('claudeWorking');
+    clearTimeout(idleTimer); // no idle timeout while Claude is working
+  };
+  const exitClaudeWorking = (): void => {
+    if (!claudeWorking) return;
+    claudeWorking = false;
+    setStatus(belled ? 'attention' : 'idle');
+  };
   const markOutput = (): void => {
     if (status === 'exited') return; // 'exited' is terminal — no later data resurrects a dead pane
     if (status !== 'working' && status !== 'claudeWorking') belled = false; // fresh burst → drop a stale bell
-    scheduleScan(); // re-check the Claude "esc to interrupt" hint
+    scheduleScan(); // re-check the Claude affordance
     if (claudeWorking) {
       setStatus('claudeWorking');
-      clearTimeout(idleTimer); // Claude is working — no idle timeout while the hint is on screen
+      clearTimeout(idleTimer);
       return;
     }
+    if (isClaudePane) return; // a Claude pane's status is owned by the affordance machine, never generic 'working'
+    if (performance.now() - lastInputAt < ECHO_WINDOW_MS) return; // this output is echo of the user's own typing
     setStatus('working');
     armIdle();
   };
-  // Claude Code shows "(esc to interrupt)" on its bottom status line only while processing a turn. We
-  // match the PARENTHESISED form (Claude's actual rendering) over only the bottom few rows — both cut
-  // false positives (the bare phrase appears in prose/diffs/this repo; requiring "(" + anchoring to the
-  // footer avoids flagging cat/grep output as Claude working). Rows are joined respecting isWrapped so
-  // the hint is still found when a narrow pane wraps it across two buffer rows.
-  const CLAUDE_HINT_RADIUS = 4; // rows above/below the cursor to scan (covers the footer + input box)
-  const CLAUDE_WORKING_RE = /\(esc to interrupt/i;
-  const hasClaudeHint = (): boolean => {
+
+  // Read the bottom FOOTER_SCAN_ROWS rows of the LIVE viewport — anchored to baseY + rows, NOT the cursor
+  // (Claude draws its footer at the screen bottom while the cursor sits in the input box, so a cursor-
+  // relative window missed it). Rows join respecting isWrapped so a wrapped footer still matches.
+  const footerText = (): string => {
     const buf = term.buffer.active;
-    // Anchor to the CURSOR row, not the whole viewport: Claude draws "(esc to interrupt)" in its footer
-    // around the input cursor, and a shell prompt sits there too — so a small window around the cursor
-    // finds the hint regardless of screen fill, while the bare phrase elsewhere in output won't match.
-    const cursor = buf.baseY + buf.cursorY;
-    const from = Math.max(0, cursor - CLAUDE_HINT_RADIUS);
-    const to = Math.min(buf.length - 1, cursor + CLAUDE_HINT_RADIUS);
+    const bottom = Math.min(buf.baseY + term.rows - 1, buf.length - 1);
+    const top = Math.max(0, bottom - FOOTER_SCAN_ROWS + 1);
     let text = '';
-    for (let y = from; y <= to; y++) {
+    for (let y = top; y <= bottom; y++) {
       const line = buf.getLine(y);
       if (!line) continue;
-      const s = line.translateToString(true);
-      text += line.isWrapped ? s : `\n${s}`; // continuation rows join with no break, so a wrapped hint matches
+      const sLine = line.translateToString(true);
+      text += line.isWrapped ? sLine : `\n${sLine}`;
     }
-    return CLAUDE_WORKING_RE.test(text);
+    return text;
   };
+  // Drive claudeWorking from the live footer affordance, constrained by REGION (footer rows) + LIVENESS:
+  // a genuine working footer animates (spinner / elapsed time), so its text keeps changing; a static
+  // "esc to interrupt" (a cat'd file, an exited/crashed Claude) is frozen and self-clears after STALE_MS.
   const scanClaude = (): void => {
     if (status === 'exited') return;
-    const found = hasClaudeHint();
-    if (found !== claudeWorking) {
-      claudeWorking = found;
-      if (found) {
-        setStatus('claudeWorking');
-        clearTimeout(idleTimer);
-      } else {
-        setStatus('working'); // hint gone → brief 'working' then idle/attention via the timer
-        armIdle();
-      }
+    const now = performance.now();
+    const text = footerText();
+    const present = CLAUDE_WORKING_RE.test(text);
+    if (text !== footerSig) {
+      footerSig = text;
+      footerSigAt = now; // the footer changed → it's live
     }
-    // Self-heal: while claudeWorking the idle timer is cleared, so keep re-checking even without new
-    // output — a finished turn that left no trailing output, or a stale false positive, still clears.
-    if (claudeWorking) scheduleScan();
+    if (present) {
+      lastAffordanceAt = now;
+      affordanceStreak++;
+      if (affordanceStreak >= 2) isClaudePane = true; // 2 consecutive sightings → a real footer, not a scrolling line
+      const frozen = now - footerSigAt >= STALE_MS; // present but unchanging too long → not real work
+      if (frozen) exitClaudeWorking();
+      else if (isClaudePane) enterClaudeWorking();
+    } else {
+      affordanceStreak = 0;
+      if (claudeWorking && now - lastAffordanceAt >= GRACE_MS) exitClaudeWorking(); // debounce a half-drawn frame
+    }
+    // Keep sampling without new output while working (liveness + the GRACE exit) OR while the affordance
+    // is present but not yet latched (so the 2-consecutive-scan latch completes on a static footer).
+    if (claudeWorking || affordanceStreak > 0) scheduleScan();
   };
   const scheduleScan = (): void => {
-    if (scanTimer) return; // throttle: at most one scan per window, so a busy spinner still gets sampled
+    if (scanTimer) return; // throttle: at most one scan per window, so a busy footer still gets sampled
     scanTimer = setTimeout(() => {
       scanTimer = undefined;
       scanClaude();
@@ -239,6 +278,7 @@ export async function createTerminal(
     (code) => {
       clearTimeout(idleTimer);
       clearTimeout(scanTimer); // stop the Claude-working self-heal poll
+      claudeWorking = false;
       setStatus('exited');
       term.write(`\r\n\x1b[90m[process exited: ${code}]\x1b[0m\r\n`);
     },
@@ -248,6 +288,7 @@ export async function createTerminal(
     // stale bell can't surface as a spurious 'attention' later) and drop an active 'attention'.
     belled = false;
     if (status === 'attention') setStatus('idle');
+    if (parsingOutput === 0) lastInputAt = performance.now(); // genuine keystroke (not a synthetic query reply)
     // Broadcast input: mirror genuine keystrokes to every pane's PTY. Excludes synthetic query replies
     // (which fire while parsing output, parsingOutput > 0) and, since those are a background pane's only
     // onData source, never originates a broadcast from a non-focused pane. The fan-out includes this
@@ -264,6 +305,7 @@ export async function createTerminal(
     const next = t.trim().slice(0, 256);
     if (next === oscTitle) return;
     oscTitle = next;
+    if (/claude/i.test(next)) isClaudePane = true; // a Claude title also marks this a Claude pane
     // A named pane shows its profile title regardless of the OSC title, so changing oscTitle can't
     // change what's displayed — don't notify (avoids re-render churn from a title-spamming shell).
     if (!title) notifyPaneTitleChange(id);

@@ -1,7 +1,9 @@
-// Runtime verification of the Claude-working sidebar status. Claude Code shows an "esc to interrupt"
-// hint on screen only while processing; we detect it and surface a prominent 'claudeWorking' status.
-// Put that hint on screen → assert the pane reads claudeWorking + the row is highlighted; clear the
-// screen → assert it reverts (so your own typing is never mistaken for Claude working).
+// Runtime verification of the Claude-working sidebar status (v2). Two things:
+//  (A) ECHO GATE: typing into a pane must NOT show a working indicator (the old bug).
+//  (B) DETECTION: when Claude Code's "esc to interrupt" footer is on the bottom status line, the pane
+//      reads claudeWorking (coral). We simulate it with a plain shell by filling the screen so an
+//      "esc to interrupt" line lands at the bottom (where Claude draws its footer), holding it for the
+//      2-scan latch, then clearing it and asserting the status reverts.
 import { _electron as electron } from 'playwright-core';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -30,7 +32,7 @@ const rowHighlighted = () => win.evaluate(() => document.querySelectorAll('.row-
 const waitStatus = async (want, tries) => {
   for (let i = 0; i < tries; i++) {
     if ((await statusOf()) === want) return true;
-    await sleep(150);
+    await sleep(200);
   }
   return false;
 };
@@ -45,25 +47,38 @@ try {
   await win.getByRole('button', { name: 'Toggle sidebar' }).click();
   await sleep(300);
   await win.getByRole('button', { name: 'New terminal' }).click();
-  await sleep(2200); // settle → idle (no hint)
+  await sleep(2400); // shell prints its prompt then settles → idle
   result.statusInitial = await statusOf();
 
-  // Put Claude's "esc to interrupt" hint on screen.
+  // (A) ECHO GATE: typing must never flip to 'working'/'claudeWorking'.
   await win.locator('.xterm-screen').first().click();
   await sleep(150);
-  await win.keyboard.type('Write-Host "working... (esc to interrupt)"');
+  let typingShowedProgress = false;
+  for (const ch of 'echo typing-no-progress'.split('')) {
+    await win.keyboard.type(ch);
+    await sleep(70);
+    const s = await statusOf();
+    if (s === 'working' || s === 'claudeWorking') typingShowedProgress = true;
+  }
+  result.typingStayedCalm = !typingShowedProgress;
+  await win.keyboard.press('Enter'); // run it (harmless) to clear the line
+  await sleep(1500);
+
+  // (B) DETECTION: fill the screen so an "esc to interrupt" line lands at the BOTTOM, then hold it.
+  await win.keyboard.type('1..60 | % { "filler $_" }; Write-Host "Forging... (5s, esc to interrupt)"');
   await win.keyboard.press('Enter');
-  result.claudeDetected = await waitStatus('claudeWorking', 25);
+  result.claudeDetected = await waitStatus('claudeWorking', 30); // ~6s: render + fill + 2-scan latch
   result.rowHighlighted = await rowHighlighted();
 
-  // Clear the screen → hint gone → reverts out of claudeWorking.
+  // Clear the screen → footer gone → reverts within GRACE.
   await win.keyboard.type('Clear-Host');
   await win.keyboard.press('Enter');
-  await sleep(1800);
+  await sleep(2500);
   result.clearedStatus = await statusOf();
 
   const ok =
     result.statusInitial !== 'claudeWorking' &&
+    result.typingStayedCalm &&
     result.claudeDetected &&
     result.rowHighlighted >= 1 &&
     result.clearedStatus !== 'claudeWorking';
