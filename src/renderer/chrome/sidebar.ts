@@ -6,6 +6,13 @@ import { SquareTerminal, X } from 'lucide';
 import { icon } from './icons';
 import type { PaneInfo } from '@features/tiling';
 
+const STATUS_LABEL: Record<string, string> = {
+  working: 'Working',
+  attention: 'Needs input',
+  idle: 'Idle',
+  exited: 'Exited',
+};
+
 export interface Sidebar {
   /** the sidebar column content; mount as the body grid's first child */
   panel: HTMLElement;
@@ -65,12 +72,13 @@ export function createSidebar(
 
   function renderRow(p: PaneInfo, index: number): HTMLElement {
     const label = p.title || `Terminal ${index + 1}`;
+    const statusLabel = STATUS_LABEL[p.status] ?? '';
     // A clickable row whose primary action (focus this terminal) must be keyboard-reachable, so it
     // gets role=button + tabindex + Enter/Space — not just a click handler on a bare <div>.
     const rowEl = document.createElement('div');
     rowEl.setAttribute('role', 'button');
     rowEl.tabIndex = 0;
-    rowEl.setAttribute('aria-label', `Focus ${label}`);
+    rowEl.setAttribute('aria-label', `Focus ${label} — ${statusLabel}`);
     rowEl.className =
       'group flex items-center gap-2 px-2 h-8 rounded-[var(--r-sm)] cursor-pointer ' +
       'outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)] ' +
@@ -83,11 +91,26 @@ export function createSidebar(
       }
     });
 
+    // Leading activity dot: working (pulsing accent) / attention (amber) / idle (dim) / exited (red).
+    const dot = document.createElement('span');
+    dot.className = 'pane-status-dot shrink-0';
+    dot.dataset.status = p.status;
+    dot.title = statusLabel;
+    rowEl.append(dot);
+
     rowEl.append(icon(SquareTerminal, 14));
     const name = document.createElement('span');
     name.className = 'flex-1 min-w-0 truncate text-[12px]';
     name.textContent = label;
     rowEl.append(name);
+    // A small status word on the right (hidden for plain idle to keep the row calm).
+    if (p.status !== 'idle') {
+      const st = document.createElement('span');
+      st.className = 'pane-status-text shrink-0 text-[10px] text-[var(--text-disabled)]';
+      st.dataset.status = p.status;
+      st.textContent = statusLabel;
+      rowEl.append(st);
+    }
 
     const close = document.createElement('button');
     close.type = 'button';
