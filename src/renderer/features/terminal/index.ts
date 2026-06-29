@@ -5,7 +5,8 @@ import '@xterm/xterm/css/xterm.css';
 import type { TermId } from '@shared/ids';
 import { ipc } from '@platform/ipc-client';
 import { registerTerminal, unregisterTerminal, writeToPty, resizePty, ackPty, whenPortReady } from '@platform/pty-port';
-import { registerPane, deletePane, notifyPaneTitleChange, notifyPaneStatusChange, type PaneStatus } from '@platform/pane-registry';
+import { registerPane, deletePane, allPanes, notifyPaneTitleChange, notifyPaneStatusChange, type PaneStatus } from '@platform/pane-registry';
+import { isBroadcasting } from '@platform/broadcast';
 import { getSettings } from '@platform/settings-controller';
 import { readTerminalTheme } from './theme';
 import { createTerminalSearch } from './search';
@@ -139,6 +140,12 @@ export async function createTerminal(
   let status: PaneStatus = 'idle';
   let belled = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  // Count of term.write() calls still being parsed. xterm fires onData both for genuine user input AND
+  // for its automatic replies to host queries (cursor-position/device-attributes/colour) — but those
+  // replies are generated WHILE PARSING program output, i.e. inside an in-flight write. So onData with
+  // parsingOutput > 0 is a synthetic reply, not a keystroke; broadcast excludes it. (Also: a background
+  // pane only ever fires onData from parsing, so it can never originate a broadcast.)
+  let parsingOutput = 0;
   const setStatus = (s: PaneStatus): void => {
     if (s === status) return;
     status = s;
@@ -160,7 +167,11 @@ export async function createTerminal(
     id,
     (data) => {
       markOutput();
-      term.write(data, () => ackPty(id, data.length));
+      parsingOutput++;
+      term.write(data, () => {
+        parsingOutput--;
+        ackPty(id, data.length);
+      });
     },
     // Local exit banner — the host session is already gone, so it isn't flow-controlled.
     (code) => {
@@ -174,7 +185,12 @@ export async function createTerminal(
     // stale bell can't surface as a spurious 'attention' later) and drop an active 'attention'.
     belled = false;
     if (status === 'attention') setStatus('idle');
-    writeToPty(id, d);
+    // Broadcast input: mirror genuine keystrokes to every pane's PTY. Excludes synthetic query replies
+    // (which fire while parsing output, parsingOutput > 0) and, since those are a background pane's only
+    // onData source, never originates a broadcast from a non-focused pane. The fan-out includes this
+    // pane, so it still gets its own keystroke. (Paste is fanned out separately, in the clipboard.)
+    if (isBroadcasting() && parsingOutput === 0) for (const p of allPanes()) p.write(d);
+    else writeToPty(id, d);
   });
 
   // Live pane title: track what the shell reports via OSC 0/2 (the running program, cwd, etc.). The
@@ -226,6 +242,8 @@ export async function createTerminal(
     profileId,
     focus: () => term.focus(),
     fit: refit,
+    write: (data) => writeToPty(id, data),
+    paste: (data) => term.paste(data), // applies THIS pane's bracketed-paste mode
     cwd: () => cwd,
     applySettings: (next) => {
       term.options.fontFamily = next.font.family;
