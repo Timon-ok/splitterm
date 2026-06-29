@@ -170,30 +170,46 @@ export async function createTerminal(
     setStatus('working');
     armIdle();
   };
-  // Claude Code shows "esc to interrupt" only while processing a turn. Scan the visible rows (throttled)
-  // for it; when it flips, switch into/out of the prominent 'claudeWorking' state.
-  const CLAUDE_WORKING_RE = /esc to interrupt/i;
+  // Claude Code shows "(esc to interrupt)" on its bottom status line only while processing a turn. We
+  // match the PARENTHESISED form (Claude's actual rendering) over only the bottom few rows — both cut
+  // false positives (the bare phrase appears in prose/diffs/this repo; requiring "(" + anchoring to the
+  // footer avoids flagging cat/grep output as Claude working). Rows are joined respecting isWrapped so
+  // the hint is still found when a narrow pane wraps it across two buffer rows.
+  const CLAUDE_HINT_RADIUS = 4; // rows above/below the cursor to scan (covers the footer + input box)
+  const CLAUDE_WORKING_RE = /\(esc to interrupt/i;
   const hasClaudeHint = (): boolean => {
     const buf = term.buffer.active;
-    const from = Math.max(0, buf.length - term.rows); // only the visible screen (the status line lives there)
-    for (let y = from; y < buf.length; y++) {
+    // Anchor to the CURSOR row, not the whole viewport: Claude draws "(esc to interrupt)" in its footer
+    // around the input cursor, and a shell prompt sits there too — so a small window around the cursor
+    // finds the hint regardless of screen fill, while the bare phrase elsewhere in output won't match.
+    const cursor = buf.baseY + buf.cursorY;
+    const from = Math.max(0, cursor - CLAUDE_HINT_RADIUS);
+    const to = Math.min(buf.length - 1, cursor + CLAUDE_HINT_RADIUS);
+    let text = '';
+    for (let y = from; y <= to; y++) {
       const line = buf.getLine(y);
-      if (line && CLAUDE_WORKING_RE.test(line.translateToString(true))) return true;
+      if (!line) continue;
+      const s = line.translateToString(true);
+      text += line.isWrapped ? s : `\n${s}`; // continuation rows join with no break, so a wrapped hint matches
     }
-    return false;
+    return CLAUDE_WORKING_RE.test(text);
   };
   const scanClaude = (): void => {
     if (status === 'exited') return;
     const found = hasClaudeHint();
-    if (found === claudeWorking) return;
-    claudeWorking = found;
-    if (found) {
-      setStatus('claudeWorking');
-      clearTimeout(idleTimer);
-    } else {
-      setStatus('working'); // Claude finished → brief 'working' then idle/attention via the timer
-      armIdle();
+    if (found !== claudeWorking) {
+      claudeWorking = found;
+      if (found) {
+        setStatus('claudeWorking');
+        clearTimeout(idleTimer);
+      } else {
+        setStatus('working'); // hint gone → brief 'working' then idle/attention via the timer
+        armIdle();
+      }
     }
+    // Self-heal: while claudeWorking the idle timer is cleared, so keep re-checking even without new
+    // output — a finished turn that left no trailing output, or a stale false positive, still clears.
+    if (claudeWorking) scheduleScan();
   };
   const scheduleScan = (): void => {
     if (scanTimer) return; // throttle: at most one scan per window, so a busy spinner still gets sampled
@@ -220,6 +236,7 @@ export async function createTerminal(
     // Local exit banner — the host session is already gone, so it isn't flow-controlled.
     (code) => {
       clearTimeout(idleTimer);
+      clearTimeout(scanTimer); // stop the Claude-working self-heal poll
       setStatus('exited');
       term.write(`\r\n\x1b[90m[process exited: ${code}]\x1b[0m\r\n`);
     },
