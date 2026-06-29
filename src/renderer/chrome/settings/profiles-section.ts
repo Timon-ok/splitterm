@@ -97,10 +97,13 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
   buttons.append(addBtn, cancelBtn);
   form.append(nameInput, shellSelect, startupArea, restoreArea, buttons);
 
+  const clearTransientShell = (): void => shellSelect.querySelectorAll('option[data-transient]').forEach((o) => o.remove());
+
   // Switch the form between "add" and "edit a profile" modes.
   function resetForm(): void {
     editingId = null;
     nameInput.value = '';
+    clearTransientShell();
     shellSelect.selectedIndex = 0;
     startupArea.value = '';
     restoreArea.value = '';
@@ -110,7 +113,18 @@ export function createProfilesSection(initial: Settings, shells: ShellProfile[])
   function startEdit(p: UserProfile): void {
     editingId = p.id;
     nameInput.value = p.name;
+    // If the profile's base shell is no longer detected, add a transient option so the id round-trips —
+    // otherwise the <select> falls back to '' and saveProfile's required-field guard silently no-ops.
+    clearTransientShell();
     shellSelect.value = p.baseShellId;
+    if (shellSelect.value !== p.baseShellId) {
+      const opt = document.createElement('option');
+      opt.value = p.baseShellId;
+      opt.textContent = `${p.baseShellId} (not detected)`;
+      opt.dataset.transient = 'true';
+      shellSelect.append(opt);
+      shellSelect.value = p.baseShellId;
+    }
     startupArea.value = (p.startupCommands ?? []).join('\n');
     restoreArea.value = (p.restoreCommands ?? []).join('\n');
     addBtn.textContent = 'Save changes';

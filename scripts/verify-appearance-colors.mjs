@@ -76,6 +76,12 @@ try {
   await openAppearance();
   await pickColor(1, '#00ff00'); // the "Active" status swatch (after the focus swatch)
   result.statusVar = await win.evaluate(() => document.documentElement.style.getPropertyValue('--status-working').trim());
+
+  // Orphan guard: close the modal (Escape) with a picker open, reopen → the picker must be gone.
+  await win.keyboard.press('Escape');
+  await sleep(400);
+  await openAppearance();
+  result.noOrphanPicker = (await win.locator('.settings-overlay input[aria-label="Hex colour"]').count()) === 0;
   await win.keyboard.press('Escape');
 
   const isRed = (c) => c.replace(/\s/g, '') === 'rgb(255,0,0)';
@@ -85,7 +91,8 @@ try {
     !isRed(result.defaultBorder) &&
     isRed(result.afterSet) &&
     result.afterReset === result.defaultBorder &&
-    result.statusVar === '#00ff00';
+    result.statusVar === '#00ff00' &&
+    result.noOrphanPicker;
   result.ok = ok;
   await finish(ok ? 0 : 1);
 } catch (err) {

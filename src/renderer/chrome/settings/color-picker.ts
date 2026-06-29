@@ -58,12 +58,18 @@ function trackPointer(area: HTMLElement, onMove: (fx: number, fy: number) => voi
     handle(e);
     const move = (ev: PointerEvent): void => handle(ev);
     const up = (ev: PointerEvent): void => {
-      area.releasePointerCapture(ev.pointerId);
+      try {
+        area.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* already released (e.g. on pointercancel) */
+      }
       area.removeEventListener('pointermove', move);
       area.removeEventListener('pointerup', up);
+      area.removeEventListener('pointercancel', up); // gesture takeover fires cancel, not up — clean up too
     };
     area.addEventListener('pointermove', move);
     area.addEventListener('pointerup', up);
+    area.addEventListener('pointercancel', up);
   });
 }
 

@@ -10,6 +10,7 @@ import { createTerminalSection } from './terminal-section';
 import { createProfilesSection } from './profiles-section';
 import { createKeyboardSection } from './keyboard-section';
 import { createGeneralSection } from './general-section';
+import { dismissColorPopovers } from './controls';
 
 type CategoryId = 'appearance' | 'terminal' | 'profiles' | 'keyboard' | 'general';
 const CATEGORIES: { id: CategoryId; label: string; glyph: IconNode }[] = [
@@ -137,6 +138,7 @@ export function createSettingsModal(): SettingsModal {
   }
 
   function select(id: CategoryId): void {
+    dismissColorPopovers(); // a switched-away section's open colour picker shouldn't linger
     active = id;
     void rebuild();
   }
@@ -155,6 +157,7 @@ export function createSettingsModal(): SettingsModal {
   function close(): void {
     if (!opened) return;
     opened = false;
+    dismissColorPopovers(); // tear down any open colour picker so it can't outlive the modal (zombie + leak)
     overlay.classList.remove('open');
     lastFocused?.focus(); // restore focus to whatever opened it (the gear, or the focused terminal)
     lastFocused = null;

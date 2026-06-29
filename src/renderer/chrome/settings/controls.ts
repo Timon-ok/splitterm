@@ -2,6 +2,13 @@
 // themed select / number / text / toggle / colour controls. Keeps the sections declarative.
 import { createColorPicker } from './color-picker';
 
+// Fired on `document` by the settings modal (close / category switch) so any open colour-picker popover
+// tears down with the modal — closing every path, not just the pointer ones.
+const COLOR_POPOVER_DISMISS = 'settings:dismiss-color-popover';
+export function dismissColorPopovers(): void {
+  document.dispatchEvent(new Event(COLOR_POPOVER_DISMISS));
+}
+
 export const FIELD =
   'h-7 px-2 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--bg-input)] text-[12px] ' +
   'text-[var(--text-primary)] placeholder:text-[var(--text-disabled)] outline-none focus:border-[var(--accent)]';
@@ -127,7 +134,9 @@ export function colorControl(opts: { value: string; fallback: string; onChange: 
     'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]';
 
   // The picker opens as a popover anchored under the swatch, mounted in the settings overlay so it's
-  // hidden with the modal (and not clipped by the dialog's overflow).
+  // hidden with the modal (+ not clipped by the dialog's overflow). Its lifetime is tied to the modal:
+  // outside pointerdown, swatch re-click, Default, OR a dismiss event the modal fires on close/category
+  // switch (so a keyboard close — Escape / Ctrl+, — can't leave a zombie popover + a leaked listener).
   let pop: HTMLElement | null = null;
   const onDocDown = (e: PointerEvent): void => {
     if (pop && !pop.contains(e.target as Node) && e.target !== swatch) closePop();
@@ -136,6 +145,7 @@ export function colorControl(opts: { value: string; fallback: string; onChange: 
     pop?.remove();
     pop = null;
     document.removeEventListener('pointerdown', onDocDown, true);
+    document.removeEventListener(COLOR_POPOVER_DISMISS, closePop);
   }
   swatch.addEventListener('click', () => {
     if (pop) {
@@ -160,8 +170,10 @@ export function colorControl(opts: { value: string; fallback: string; onChange: 
       const pr = pop.getBoundingClientRect();
       if (pr.right > window.innerWidth - 8) pop.style.left = `${window.innerWidth - pr.width - 8}px`;
       if (pr.bottom > window.innerHeight - 8) pop.style.top = `${r.top - pr.height - 6}px`;
+      pop.querySelector<HTMLInputElement>('input[aria-label="Hex colour"]')?.focus(); // keyboard entry point
     });
     document.addEventListener('pointerdown', onDocDown, true);
+    document.addEventListener(COLOR_POPOVER_DISMISS, closePop);
   });
 
   reset.addEventListener('click', () => {
