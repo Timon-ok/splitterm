@@ -1,9 +1,9 @@
-// Runtime verification of the Claude-working sidebar status (v2). Two things:
-//  (A) ECHO GATE: typing into a pane must NOT show a working indicator (the old bug).
-//  (B) DETECTION: when Claude Code's "esc to interrupt" footer is on the bottom status line, the pane
-//      reads claudeWorking (coral). We simulate it with a plain shell by filling the screen so an
-//      "esc to interrupt" line lands at the bottom (where Claude draws its footer), holding it for the
-//      2-scan latch, then clearing it and asserting the status reverts.
+// Runtime verification of the Claude-working sidebar status (v3, animation-gated). Three things:
+//  (A) ECHO GATE: typing into a pane must NOT show a working indicator.
+//  (B) DETECTION: an ANIMATING "esc to interrupt" footer at the screen bottom (Claude's actual layout)
+//      lights claudeWorking. We simulate it with a plain shell by filling the screen, then repeatedly
+//      printing the affordance with a CHANGING counter (the line keeps changing = animating).
+//  (C) A STATIC "esc to interrupt" line must NOT light it (the cat'd-file / hung-Claude false positive).
 import { _electron as electron } from 'playwright-core';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -28,7 +28,6 @@ async function finish(code) {
   process.exit(code);
 }
 const statusOf = () => win.evaluate(() => document.querySelector('.pane-status-dot')?.getAttribute('data-status') ?? '');
-const rowHighlighted = () => win.evaluate(() => document.querySelectorAll('.row-claude-working').length);
 const waitStatus = async (want, tries) => {
   for (let i = 0; i < tries; i++) {
     if ((await statusOf()) === want) return true;
@@ -47,41 +46,46 @@ try {
   await win.getByRole('button', { name: 'Toggle sidebar' }).click();
   await sleep(300);
   await win.getByRole('button', { name: 'New terminal' }).click();
-  await sleep(2400); // shell prints its prompt then settles → idle
+  await sleep(2400);
   result.statusInitial = await statusOf();
 
-  // (A) ECHO GATE: typing must never flip to 'working'/'claudeWorking'.
+  // (A) ECHO GATE: typing never flips to working/claudeWorking.
   await win.locator('.xterm-screen').first().click();
   await sleep(150);
   let typingShowedProgress = false;
   for (const ch of 'echo typing-no-progress'.split('')) {
     await win.keyboard.type(ch);
     await sleep(70);
-    const s = await statusOf();
-    if (s === 'working' || s === 'claudeWorking') typingShowedProgress = true;
+    const st = await statusOf();
+    if (st === 'working' || st === 'claudeWorking') typingShowedProgress = true;
   }
   result.typingStayedCalm = !typingShowedProgress;
-  await win.keyboard.press('Enter'); // run it (harmless) to clear the line
+  await win.keyboard.press('Enter');
   await sleep(1500);
 
-  // (B) DETECTION: fill the screen so an "esc to interrupt" line lands at the BOTTOM, then hold it.
-  await win.keyboard.type('1..60 | % { "filler $_" }; Write-Host "Forging... (5s, esc to interrupt)"');
+  // (C) STATIC affordance must NOT light claudeWorking (fill screen, print one static line, hold).
+  await win.keyboard.type('1..50 | % { Write-Host "" }; Write-Host "static (esc to interrupt) line"');
   await win.keyboard.press('Enter');
-  result.claudeDetected = await waitStatus('claudeWorking', 30); // ~6s: render + fill + 2-scan latch
-  result.rowHighlighted = await rowHighlighted();
+  await sleep(3000); // longer than the confirm window — must stay non-claudeWorking
+  result.staticDidNotLight = (await statusOf()) !== 'claudeWorking';
 
-  // Clear the screen → footer gone → reverts within GRACE.
-  await win.keyboard.type('Clear-Host');
+  // (B) ANIMATING affordance at the bottom → claudeWorking.
+  await win.keyboard.type('1..40 | % { Write-Host "" }; 1..18 | % { Write-Host "Forging... ($_ tokens, esc to interrupt)"; Start-Sleep -Milliseconds 220 }');
   await win.keyboard.press('Enter');
-  await sleep(2500);
+  result.claudeDetected = await waitStatus('claudeWorking', 30); // during the animating loop
+
+  // Scroll the affordance well off the bottom → no longer present → reverts (out of claudeWorking).
+  await win.keyboard.type("1..80 | % { '.' }");
+  await win.keyboard.press('Enter');
+  result.cleared = await waitStatus('idle', 30); // up to 6s for the GRACE exit
   result.clearedStatus = await statusOf();
 
   const ok =
     result.statusInitial !== 'claudeWorking' &&
     result.typingStayedCalm &&
+    result.staticDidNotLight &&
     result.claudeDetected &&
-    result.rowHighlighted >= 1 &&
-    result.clearedStatus !== 'claudeWorking';
+    result.cleared;
   result.ok = ok;
   await finish(ok ? 0 : 1);
 } catch (err) {

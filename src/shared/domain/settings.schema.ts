@@ -127,9 +127,15 @@ const str = (v: unknown, fallback: string): string =>
 
 const bool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback);
 
-// A #hex colour (#rgb or #rrggbb) or '' (meaning "use the theme default"). Anything else → ''. This is
-// a trust boundary: the value is written into a CSS custom property, so only a strict hex is allowed.
-const hexColor = (v: unknown): string => (typeof v === 'string' && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v) ? v : '');
+// A #hex colour or '' (meaning "use the theme default"). Anything else → ''. This is a trust boundary:
+// the value is written into a CSS custom property, so only a strict hex passes. A 3-digit #rgb is
+// expanded to #rrggbb so stored values are always 6-digit (the native colour picker only does #rrggbb).
+const hexColor = (v: unknown): string => {
+  if (typeof v !== 'string') return '';
+  const h = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(v)?.[1];
+  if (!h) return '';
+  return h.length === 3 ? `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}` : `#${h}`;
+};
 
 const num = (v: unknown, fallback: number, min: number, max: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;

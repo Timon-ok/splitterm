@@ -62,9 +62,9 @@ describe('normalize', () => {
   });
 
   describe('appearance.focusBorderColor', () => {
-    it('keeps a valid #hex (#rgb or #rrggbb)', () => {
+    it('keeps a 6-digit #hex and expands a 3-digit one to #rrggbb', () => {
       expect(normalize({ appearance: { focusBorderColor: '#ff8800' } }).appearance.focusBorderColor).toBe('#ff8800');
-      expect(normalize({ appearance: { focusBorderColor: '#fa0' } }).appearance.focusBorderColor).toBe('#fa0');
+      expect(normalize({ appearance: { focusBorderColor: '#fa0' } }).appearance.focusBorderColor).toBe('#ffaa00');
     });
     it('rejects non-hex so it cannot inject into the CSS var', () => {
       for (const bad of ['red', 'rgb(1,2,3)', '#xyz', '#1234', 'url(x)', 'blue;}', 42])
