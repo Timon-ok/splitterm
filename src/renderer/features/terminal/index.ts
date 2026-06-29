@@ -133,13 +133,16 @@ export async function createTerminal(
     term.write('\r\n\x1b[1;31m[pty-host unavailable — restart splitterm to use terminals again.]\x1b[0m\r\n');
   }
 
-  // Live activity status (shown in the Sessions sidebar). Derived from the firehose — no output
-  // parsing: streaming output ⇒ 'working'; quiet ⇒ 'idle' (or 'attention' if the shell rang the bell
-  // since, e.g. Claude Code signalling it needs you); exit ⇒ 'exited'. For a Claude pane this reads as
-  // thinking → working, your-turn → idle/attention, done → exited.
+  // Live activity status (shown in the Sessions sidebar). Mostly firehose-derived: streaming output ⇒
+  // 'working'; quiet ⇒ 'idle' (or 'attention' if the shell rang the bell since); exit ⇒ 'exited'. ON
+  // TOP, we surface Claude Code specifically: while it processes a turn it shows an "esc to interrupt"
+  // hint on screen, so when that's present the pane is 'claudeWorking' (rendered in Claude's colour) —
+  // distinct from generic activity, so your own typing isn't mistaken for Claude working.
   let status: PaneStatus = 'idle';
   let belled = false;
+  let claudeWorking = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let scanTimer: ReturnType<typeof setTimeout> | undefined;
   // Count of term.write() calls still being parsed. xterm fires onData both for genuine user input AND
   // for its automatic replies to host queries (cursor-position/device-attributes/colour) — but those
   // replies are generated WHILE PARSING program output, i.e. inside an in-flight write. So onData with
@@ -151,12 +154,69 @@ export async function createTerminal(
     status = s;
     notifyPaneStatusChange(id);
   };
-  const markOutput = (): void => {
-    if (status === 'exited') return; // 'exited' is terminal — no later data resurrects a dead pane
-    if (status !== 'working') belled = false; // a fresh output burst → drop a stale bell from a prior turn
-    setStatus('working');
+  const armIdle = (): void => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => setStatus(belled ? 'attention' : 'idle'), ACTIVE_IDLE_MS);
+  };
+  const markOutput = (): void => {
+    if (status === 'exited') return; // 'exited' is terminal — no later data resurrects a dead pane
+    if (status !== 'working' && status !== 'claudeWorking') belled = false; // fresh burst → drop a stale bell
+    scheduleScan(); // re-check the Claude "esc to interrupt" hint
+    if (claudeWorking) {
+      setStatus('claudeWorking');
+      clearTimeout(idleTimer); // Claude is working — no idle timeout while the hint is on screen
+      return;
+    }
+    setStatus('working');
+    armIdle();
+  };
+  // Claude Code shows "(esc to interrupt)" on its bottom status line only while processing a turn. We
+  // match the PARENTHESISED form (Claude's actual rendering) over only the bottom few rows — both cut
+  // false positives (the bare phrase appears in prose/diffs/this repo; requiring "(" + anchoring to the
+  // footer avoids flagging cat/grep output as Claude working). Rows are joined respecting isWrapped so
+  // the hint is still found when a narrow pane wraps it across two buffer rows.
+  const CLAUDE_HINT_RADIUS = 4; // rows above/below the cursor to scan (covers the footer + input box)
+  const CLAUDE_WORKING_RE = /\(esc to interrupt/i;
+  const hasClaudeHint = (): boolean => {
+    const buf = term.buffer.active;
+    // Anchor to the CURSOR row, not the whole viewport: Claude draws "(esc to interrupt)" in its footer
+    // around the input cursor, and a shell prompt sits there too — so a small window around the cursor
+    // finds the hint regardless of screen fill, while the bare phrase elsewhere in output won't match.
+    const cursor = buf.baseY + buf.cursorY;
+    const from = Math.max(0, cursor - CLAUDE_HINT_RADIUS);
+    const to = Math.min(buf.length - 1, cursor + CLAUDE_HINT_RADIUS);
+    let text = '';
+    for (let y = from; y <= to; y++) {
+      const line = buf.getLine(y);
+      if (!line) continue;
+      const s = line.translateToString(true);
+      text += line.isWrapped ? s : `\n${s}`; // continuation rows join with no break, so a wrapped hint matches
+    }
+    return CLAUDE_WORKING_RE.test(text);
+  };
+  const scanClaude = (): void => {
+    if (status === 'exited') return;
+    const found = hasClaudeHint();
+    if (found !== claudeWorking) {
+      claudeWorking = found;
+      if (found) {
+        setStatus('claudeWorking');
+        clearTimeout(idleTimer);
+      } else {
+        setStatus('working'); // hint gone → brief 'working' then idle/attention via the timer
+        armIdle();
+      }
+    }
+    // Self-heal: while claudeWorking the idle timer is cleared, so keep re-checking even without new
+    // output — a finished turn that left no trailing output, or a stale false positive, still clears.
+    if (claudeWorking) scheduleScan();
+  };
+  const scheduleScan = (): void => {
+    if (scanTimer) return; // throttle: at most one scan per window, so a busy spinner still gets sampled
+    scanTimer = setTimeout(() => {
+      scanTimer = undefined;
+      scanClaude();
+    }, 200);
   };
   const bellEvt = term.onBell(() => {
     belled = true; // a tool finished / wants attention; resolves to 'attention' once output goes quiet
@@ -176,6 +236,7 @@ export async function createTerminal(
     // Local exit banner — the host session is already gone, so it isn't flow-controlled.
     (code) => {
       clearTimeout(idleTimer);
+      clearTimeout(scanTimer); // stop the Claude-working self-heal poll
       setStatus('exited');
       term.write(`\r\n\x1b[90m[process exited: ${code}]\x1b[0m\r\n`);
     },
@@ -282,6 +343,7 @@ export async function createTerminal(
     dispose: () => {
       observer.disconnect();
       clearTimeout(idleTimer);
+      clearTimeout(scanTimer);
       osc7.dispose();
       titleEvt.dispose();
       bellEvt.dispose();
