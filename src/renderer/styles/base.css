@@ -25,6 +25,14 @@ body {
   user-select: none;
 }
 
+/* Text selection in editable chrome (settings inputs) — neutral + theme-driven, no OS blue, so it
+   matches the monochrome UI. The terminal draws its own selection (xterm), so this is scoped to fields. */
+input::selection,
+textarea::selection {
+  background: var(--selection);
+  color: var(--text-primary);
+}
+
 /* App grid: titlebar / body / statusbar */
 #app {
   display: grid;

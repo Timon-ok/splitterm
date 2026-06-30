@@ -5,11 +5,11 @@ import type { Settings, ThemeName } from '@shared/domain/settings.schema';
 import { row, sectionHeading, selectControl, toggle, colorControl, animSelect } from './controls';
 import { STATUS_LABELS, DEFAULT_STATUS_COLORS, type StatusState } from '@shared/domain/status-appearance';
 
-// The colour swatch needs a #rrggbb value; fall back to the theme accent (or a default blue if
+// The colour swatch needs a #rrggbb value; fall back to the theme accent (or a neutral grey if
 // the computed token isn't a 6-digit hex) so the swatch previews the current default.
 function accentHex(): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#4493f8';
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : '#9da0a8';
 }
 
 export function createAppearanceSection(initial: Settings): HTMLElement {

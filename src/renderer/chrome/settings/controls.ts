@@ -221,10 +221,14 @@ export function toggle(opts: { checked: boolean; onChange: (value: boolean) => v
       'app-no-drag relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full cursor-pointer ' +
       'transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ' +
       (checked ? 'bg-[var(--accent)]' : 'bg-[var(--bg-active)]');
+    // Knob contrasts with its track in BOTH states: dark ink on the near-white "on" accent, a light
+    // grey on the dim "off" track. (A fixed white knob would vanish on the monochrome on-state.)
     knob.className =
-      'inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ' +
+      'inline-block h-3.5 w-3.5 rounded-full transition-[transform,background-color] ' +
       'duration-[var(--motion-fast)] ease-[var(--ease-out)] ' +
-      (checked ? 'translate-x-[15px]' : 'translate-x-[2px]');
+      (checked
+        ? 'bg-[var(--accent-text)] translate-x-[15px]'
+        : 'bg-[var(--text-secondary)] translate-x-[2px]');
   };
   btn.append(knob);
   paint();
