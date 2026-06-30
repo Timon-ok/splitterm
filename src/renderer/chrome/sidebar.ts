@@ -158,7 +158,7 @@ export function createSidebar(
       // the calm dim label — its red dot already signals the exit without an alarming red word.
       const coloured = p.status === 'claudeWorking' || p.status === 'attention';
       statusText.style.color = resolved && coloured ? resolved.color : '';
-      rowEl.classList.toggle('row-claude-working', p.status === 'claudeWorking'); // prominent Claude tint
+      rowEl.classList.toggle('row-claude-working', p.status === 'claudeWorking'); // subtle Claude row tint (no bar)
       if (p.status === 'claudeWorking' && resolved) rowEl.style.setProperty('--row-claude', resolved.color);
       else rowEl.style.removeProperty('--row-claude');
       rowEl.setAttribute('aria-label', `Focus ${label} — ${statusLabel}`);
