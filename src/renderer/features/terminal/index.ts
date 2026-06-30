@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
 import type { TermId } from '@shared/ids';
+import type { ClaudeStatus } from '@shared/ipc';
 import { ipc } from '@platform/ipc-client';
 import { registerTerminal, unregisterTerminal, writeToPty, resizePty, ackPty, whenPortReady } from '@platform/pty-port';
 import { registerPane, deletePane, allPanes, notifyPaneTitleChange, notifyPaneStatusChange, type PaneStatus } from '@platform/pane-registry';
@@ -147,14 +148,17 @@ export async function createTerminal(
 
   // Live activity status (shown in the Sessions sidebar). Mostly firehose-derived: streaming output ⇒
   // 'working'; quiet ⇒ 'idle' (or 'attention' if the shell rang the bell); exit ⇒ 'exited'. ON TOP we
-  // surface Claude Code: while it processes a turn it draws an animated "esc to interrupt" affordance on
-  // its bottom status line, so the pane reads 'claudeWorking' (Claude's colour). Typing never shows
-  // progress: generic 'working' is echo-gated, and 'claudeWorking' needs a GENUINELY ANIMATING footer
-  // (the affordance LINE keeps changing), so a static "esc to interrupt" (a cat'd file, a hung/exited
-  // Claude, or your own composing) never lights it.
+  // surface Claude Code. The AUTHORITATIVE source is the host's claude-status watcher (it reads Claude's
+  // own ~/.claude/sessions state): 'busy' ⇒ claudeWorking, 'waiting' ⇒ attention, 'idle' ⇒ between turns.
+  // When a Claude session is correlated to this pane (claudeSignal !== null) it owns the Claude colour and
+  // the footer scrape is suppressed. The scrape stays only as a FALLBACK for panes with no correlated
+  // session: it lights 'claudeWorking' from a GENUINELY ANIMATING "esc to interrupt" footer (the line
+  // keeps changing), so a static one (a cat'd file, a hung Claude, your own composing) never lights it.
   let status: PaneStatus = 'idle';
   let belled = false;
   let claudeWorking = false;
+  // The pane's correlated Claude session state from the host watcher; null = none correlated (scrape applies).
+  let claudeSignal: 'busy' | 'waiting' | 'idle' | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let scanTimer: ReturnType<typeof setTimeout> | undefined;
   let lastInputAt = 0; // performance.now() of the last genuine keystroke — used to ignore typing echo
@@ -189,15 +193,38 @@ export async function createTerminal(
     claudeWorking = false;
     setStatus(belled ? 'attention' : 'idle');
   };
+  // Authoritative Claude state from the host watcher (~/.claude/sessions). When a session is correlated
+  // it OWNS the Claude colour and suppresses the footer scrape; 'none' hands control back to the scrape.
+  const applyClaude = (sig: ClaudeStatus): void => {
+    if (status === 'exited') return; // a dead pane stays dead — ignore late signals
+    claudeSignal = sig === 'none' ? null : sig;
+    clearTimeout(scanTimer); // the watcher is now the source of truth (or 'none' re-arms the scrape on next output)
+    scanTimer = undefined;
+    if (sig === 'busy') {
+      claudeWorking = true;
+      clearTimeout(idleTimer); // event-driven now: stay claudeWorking until the watcher says otherwise
+      setStatus('claudeWorking');
+    } else if (sig === 'waiting') {
+      claudeWorking = false;
+      clearTimeout(idleTimer);
+      setStatus('attention'); // Claude needs the user (e.g. a permission prompt)
+    } else {
+      // 'idle' (between turns) or 'none' (session gone): drop any Claude-driven working/attention state
+      // (a real pending bell still resolves to 'attention'); leave generic 'working' to idle out on its own.
+      claudeWorking = false;
+      if (status === 'claudeWorking' || status === 'attention') setStatus(belled ? 'attention' : 'idle');
+    }
+  };
   const markOutput = (): void => {
     if (status === 'exited') return; // 'exited' is terminal — no later data resurrects a dead pane
     if (status !== 'working' && status !== 'claudeWorking') belled = false; // fresh burst → drop a stale bell
-    scheduleScan(); // re-check the Claude affordance
+    if (claudeSignal === null) scheduleScan(); // re-check the affordance only when the watcher isn't authoritative
     if (claudeWorking) {
       setStatus('claudeWorking');
       clearTimeout(idleTimer);
       return;
     }
+    if (claudeSignal === 'waiting') return; // Claude is waiting on the user — its own output mustn't flip it to 'working'
     if (performance.now() - lastInputAt < ECHO_WINDOW_MS) return; // this output is echo of the user's own typing
     setStatus('working');
     armIdle();
@@ -225,7 +252,7 @@ export async function createTerminal(
   // keeps changing; a static "esc to interrupt" (a cat'd file, a hung Claude) never animates and is
   // ignored — and typing below it doesn't count (only the matched line's own changes do).
   const scanClaude = (): void => {
-    if (status === 'exited') return;
+    if (status === 'exited' || claudeSignal !== null) return; // watcher authoritative → scrape suppressed
     const now = performance.now();
     const affLine = footerLines().find((l) => CLAUDE_WORKING_RE.test(l)) ?? '';
     const present = affLine !== '';
@@ -283,9 +310,11 @@ export async function createTerminal(
       clearTimeout(idleTimer);
       clearTimeout(scanTimer); // stop the Claude-working self-heal poll
       claudeWorking = false;
+      claudeSignal = null;
       setStatus('exited');
       term.write(`\r\n\x1b[90m[process exited: ${code}]\x1b[0m\r\n`);
     },
+    applyClaude, // authoritative Claude status from the host watcher (~/.claude/sessions)
   );
   term.onData((d) => {
     // The user is engaging — clear any pending bell (even during the post-bell 'working' window, so a
